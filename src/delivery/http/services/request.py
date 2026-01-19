@@ -27,7 +27,7 @@ class RequestInfoService:
         return request.headers.get(self._settings.user_agent_header, "")
 
     def get_user_ip(self, request: Request) -> str | None:
-        xff = request.headers.get("x-forwarded-for")
+        xff = request.headers.get(self._settings.ip_header)
 
         if self._settings.number_of_proxies == 0 or xff is None:
             client = request.client

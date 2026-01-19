@@ -12,6 +12,7 @@ class JWTServiceSettings(BaseSettings):
 
     secret_key: SecretStr
     algorithm: str = "HS256"
+    typ: str = "at+jwt"
     access_token_expire_minutes: int = 15
 
     @property
@@ -36,7 +37,7 @@ class JWTService:
             "sub": str(user_id),
             "exp": iat + self._settings.access_token_expire,
             "iat": iat,
-            "typ": "at+jwt",
+            "typ": self._settings.typ,
             **payload_kwargs,
         }
 

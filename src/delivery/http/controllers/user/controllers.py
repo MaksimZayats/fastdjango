@@ -1,11 +1,9 @@
 import logging
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Annotated, Any
+from typing import Any
 
-from annotated_types import Len
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, EmailStr
 from throttled import rate_limiter
 
 from core.user.services.jwt import JWTService
@@ -17,25 +15,18 @@ from core.user.services.refresh_session import (
 )
 from core.user.services.user import UserService
 from delivery.http.auth.jwt import AuthenticatedRequest, JWTAuthFactory
+from delivery.http.controllers.user.schemas import (
+    CreateUserRequestSchema,
+    IssueTokenRequestSchema,
+    RefreshTokenRequestSchema,
+    TokenResponseSchema,
+    UserSchema,
+)
 from delivery.http.services.request import RequestInfoService
 from delivery.http.services.throttler import IPThrottlerFactory, UserThrottlerFactory
-from infrastructure.delivery.controllers import Controller, TransactionController
+from infrastructure.delivery.controllers import TransactionController
 
 logger = logging.getLogger(__name__)
-
-
-class IssueTokenRequestSchema(BaseModel):
-    username: str
-    password: str
-
-
-class RefreshTokenRequestSchema(BaseModel):
-    refresh_token: str
-
-
-class TokenResponseSchema(BaseModel):
-    access_token: str
-    refresh_token: str
 
 
 @dataclass(kw_only=True)
@@ -163,26 +154,8 @@ class UserTokenController(TransactionController):
         return super().handle_exception(exception)
 
 
-class CreateUserRequestSchema(BaseModel):
-    email: EmailStr
-    username: Annotated[str, Len(max_length=150)]
-    first_name: Annotated[str, Len(max_length=150)]
-    last_name: Annotated[str, Len(max_length=150)]
-    password: Annotated[str, Len(max_length=128)]
-
-
-class UserSchema(BaseModel):
-    id: int
-    username: str
-    email: str
-    first_name: str
-    last_name: str
-    is_staff: bool
-    is_superuser: bool
-
-
 @dataclass(kw_only=True)
-class UserController(Controller):
+class UserController(TransactionController):
     _jwt_auth_factory: JWTAuthFactory
     _user_service: UserService
 
