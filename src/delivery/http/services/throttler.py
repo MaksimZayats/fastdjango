@@ -23,8 +23,6 @@ class BaseThrottler(ABC):
 
     async def __call__(self, request: Request) -> None:
         key = self._build_key(request=request)
-        logger.debug("Throttling key: %s", key)
-
         result = await self._throttler.limit(key=key, cost=self._cost)
         if result.limited:
             logger.debug("Request with key %s was throttled", key)

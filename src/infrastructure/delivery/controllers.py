@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any
 
-from django.db.transaction import atomic
+from infrastructure.telemetry.transaction import traced_atomic
 
 _CONTROLLER_METHODS_EXCLUDE = ("register", "handle_exception")
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Controller(ABC):
     def __post_init__(self) -> None:
         self._wrap_methods()
@@ -46,11 +46,20 @@ class Controller(ABC):
         return wrapper
 
 
-@dataclass
+@dataclass(kw_only=True)
 class TransactionController(Controller, ABC):
     def _wrap_route(self, method: Callable[..., Any]) -> Callable[..., Any]:
         method = self._add_transaction(method)
         return super()._wrap_route(method)
 
     def _add_transaction(self, method: Callable[..., Any]) -> Callable[..., Any]:
-        return atomic(method)
+        @wraps(method)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with traced_atomic(
+                "controller transaction",
+                controller=type(self).__name__,
+                method=method.__name__,  # type: ignore[unresolved-attribute]
+            ):
+                return method(*args, **kwargs)
+
+        return wrapper

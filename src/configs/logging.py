@@ -45,7 +45,7 @@ class LoggingSettings(BaseSettings):
         }
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LoggingConfigurator:
     _settings: LoggingSettings
 

@@ -19,7 +19,7 @@ class JWTServiceSettings(BaseSettings):
         return timedelta(minutes=self.access_token_expire_minutes)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class JWTService:
     EXPIRED_SIGNATURE_ERROR = jwt.ExpiredSignatureError
     INVALID_TOKEN_ERROR = jwt.InvalidTokenError

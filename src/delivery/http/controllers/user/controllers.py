@@ -19,7 +19,7 @@ from core.user.services.user import UserService
 from delivery.http.auth.jwt import AuthenticatedRequest, JWTAuthFactory
 from delivery.http.services.request import RequestInfoService
 from delivery.http.services.throttler import IPThrottlerFactory, UserThrottlerFactory
-from infrastructure.delivery.controllers import Controller
+from infrastructure.delivery.controllers import Controller, TransactionController
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,8 @@ class TokenResponseSchema(BaseModel):
     refresh_token: str
 
 
-@dataclass
-class UserTokenController(Controller):
+@dataclass(kw_only=True)
+class UserTokenController(TransactionController):
     _jwt_auth_factory: JWTAuthFactory
     _jwt_service: JWTService
     _request_info_service: RequestInfoService
@@ -181,7 +181,7 @@ class UserSchema(BaseModel):
     is_superuser: bool
 
 
-@dataclass
+@dataclass(kw_only=True)
 class UserController(Controller):
     _jwt_auth_factory: JWTAuthFactory
     _user_service: UserService

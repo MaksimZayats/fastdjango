@@ -21,7 +21,7 @@ class AuthenticatedRequest(Request):
     state: AuthenticatedRequestState  # type: ignore[bad-override, assignment]
 
 
-@dataclass
+@dataclass(kw_only=True)
 class JWTAuthFactory:
     """Factory for creating JWT auth instances with optional permission checks.
 

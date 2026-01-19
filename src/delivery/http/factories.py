@@ -17,7 +17,7 @@ from infrastructure.telemetry.configurator import LogfireConfigurator
 from infrastructure.telemetry.instrumentor import OpenTelemetryInstrumentor
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Lifespan:
     _application_settings: ApplicationSettings
     _anyio_configurator: AnyIOConfigurator
@@ -35,7 +35,7 @@ class Lifespan:
         yield
 
 
-@dataclass
+@dataclass(kw_only=True)
 class FastAPIFactory:
     _application_settings: ApplicationSettings
     _http_settings: HTTPSettings

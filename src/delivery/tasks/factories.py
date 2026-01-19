@@ -9,7 +9,7 @@ from delivery.tasks.tasks.ping import PingTaskController
 from infrastructure.redis.settings import RedisSettings
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CeleryAppFactory:
     _application_settings: ApplicationSettings
     _celery_settings: CelerySettings
@@ -48,7 +48,7 @@ class CeleryAppFactory:
         }
 
 
-@dataclass
+@dataclass(kw_only=True)
 class TasksRegistryFactory:
     _celery_app_factory: CeleryAppFactory
     _ping_controller: PingTaskController

@@ -8,7 +8,7 @@ class TaskNotFoundError(Exception):
     pass
 
 
-@dataclass
+@dataclass(kw_only=True)
 class BaseTasksRegistry:
     _celery_app: Celery
 

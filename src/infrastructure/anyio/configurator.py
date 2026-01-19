@@ -13,7 +13,7 @@ class AnyIOSettings(BaseSettings):
     thread_limiter_tokens: int = 40
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AnyIOConfigurator:
     _settings: AnyIOSettings
 

@@ -21,7 +21,7 @@ class RefreshSessionServiceSettings(BaseSettings):
         return timedelta(days=self.refresh_token_ttl_days)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class RefreshSessionService:
     _settings: RefreshSessionServiceSettings
 

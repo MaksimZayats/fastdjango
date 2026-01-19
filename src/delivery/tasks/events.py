@@ -8,7 +8,7 @@ from infrastructure.delivery.controllers import Controller
 from infrastructure.telemetry.configurator import LogfireConfigurator
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CeleryEvents(Controller):
     _application_settings: ApplicationSettings
     _logfire_configurator: LogfireConfigurator

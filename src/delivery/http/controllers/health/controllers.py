@@ -16,7 +16,7 @@ class HealthCheckResponseSchema(BaseModel):
     status: Literal["ok"]
 
 
-@dataclass
+@dataclass(kw_only=True)
 class HealthController(Controller):
     _health_service: HealthService
 

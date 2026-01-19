@@ -12,7 +12,7 @@ from throttled.asyncio import (
 from infrastructure.redis.settings import RedisSettings
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ThrottlerStoreFactory:
     _redis_settings: RedisSettings
 
@@ -20,7 +20,7 @@ class ThrottlerStoreFactory:
         return RedisStore(server=self._redis_settings.url.get_secret_value())
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ThrottlerFactory:
     _store_factory: ThrottlerStoreFactory
 
@@ -39,7 +39,7 @@ class ThrottlerFactory:
         )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AsyncThrottlerStoreFactory:
     _redis_settings: RedisSettings
 
@@ -47,7 +47,7 @@ class AsyncThrottlerStoreFactory:
         return AsyncRedisStore(server=self._redis_settings.url.get_secret_value())
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AsyncThrottlerFactory:
     _store_factory: AsyncThrottlerStoreFactory
 

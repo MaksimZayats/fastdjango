@@ -14,7 +14,7 @@ class TaskName(StrEnum):
     PING = "ping"
 
 
-@dataclass
+@dataclass(kw_only=True)
 class TasksRegistry(BaseTasksRegistry):
     @property
     def ping(self) -> Task[[], PingResult]:

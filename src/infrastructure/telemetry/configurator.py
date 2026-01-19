@@ -20,7 +20,7 @@ class LogfireSettings(BaseSettings):
         return self.enabled and self.token is not None
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LogfireConfigurator:
     _logfire_settings: LogfireSettings
 

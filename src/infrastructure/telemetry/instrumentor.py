@@ -17,7 +17,7 @@ class InstrumentorSettings(BaseSettings):
     )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class OpenTelemetryInstrumentor:
     _instrumentor_settings: InstrumentorSettings
     _logfire_settings: LogfireSettings

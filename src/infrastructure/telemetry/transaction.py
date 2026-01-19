@@ -1,0 +1,31 @@
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Any
+
+import logfire
+from django.db import transaction
+from logfire import LogfireSpan
+
+
+@contextmanager
+def traced_atomic(
+    span_name: str = "database transaction",
+    **span_attributes: Any,
+) -> Generator[LogfireSpan]:
+    """Context manager that wraps Django's transaction.atomic() with a Logfire span.
+
+    Usage:
+        with traced_atomic("create user and profile", user_id=user.pk):
+            User.objects.create(...)
+            Profile.objects.create(...)
+    """
+    with logfire.span(span_name, **span_attributes) as span:
+        try:
+            with transaction.atomic():
+                yield span
+
+            span.set_attribute("db.transaction.outcome", "commit")
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_attribute("db.transaction.outcome", "rollback")
+            raise
