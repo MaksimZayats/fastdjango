@@ -161,17 +161,17 @@ Expected response:
 
 ## Documentation
 
-Full documentation is available at [template.zayats.dev](https://template.zayats.dev).
+Full documentation is available at [fastdjango.zayats.dev](https://fastdjango.zayats.dev).
 
 | Section                                                                                         | Description                                |
 |-------------------------------------------------------------------------------------------------|--------------------------------------------|
-| [Quick Start](https://template.zayats.dev/getting-started/quick-start/)                         | Get running in 5 minutes                   |
-| [Project Structure](https://template.zayats.dev/getting-started/project-structure/)             | Understand the codebase organization       |
-| [Development Environment](https://template.zayats.dev/getting-started/development-environment/) | IDE setup and tooling                      |
-| [Tutorial: Build a Todo List](https://template.zayats.dev/tutorial/)                            | Learn by building a complete feature       |
-| [Concepts](https://template.zayats.dev/concepts/)                                               | Service layer, IoC, controllers, factories |
-| [How-To Guides](https://template.zayats.dev/how-to/)                                            | Add domains, tasks, secure endpoints       |
-| [Reference](https://template.zayats.dev/reference/)                                             | Environment variables, Makefile, Docker    |
+| [Quick Start](https://fastdjango.zayats.dev/getting-started/quick-start/)                         | Get running in 5 minutes                   |
+| [Project Structure](https://fastdjango.zayats.dev/getting-started/project-structure/)             | Understand the codebase organization       |
+| [Development Environment](https://fastdjango.zayats.dev/getting-started/development-environment/) | IDE setup and tooling                      |
+| [Tutorial: Build a Todo List](https://fastdjango.zayats.dev/tutorial/)                            | Learn by building a complete feature       |
+| [Concepts](https://fastdjango.zayats.dev/concepts/)                                               | Service layer, IoC, controllers, factories |
+| [How-To Guides](https://fastdjango.zayats.dev/how-to/)                                            | Add domains, tasks, secure endpoints       |
+| [Reference](https://fastdjango.zayats.dev/reference/)                                             | Environment variables, Makefile, Docker    |
 
 ## Tech Stack
 

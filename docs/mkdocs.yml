@@ -1,5 +1,5 @@
 site_name: Fast Django
-site_url: https://template.zayats.dev
+site_url: https://fastdjango.zayats.dev
 site_description: Production-ready FastAPI, Django, and Celery application with dependency injection
 repo_url: https://github.com/MaksimZayats/fastdjango
 repo_name: MaksimZayats/fastdjango
