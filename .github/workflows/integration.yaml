@@ -39,7 +39,7 @@ jobs:
       - name: Wait for API to be ready
         run: |
           for i in {1..30}; do
-            if curl -sf http://localhost:8009/api/v1/health; then
+            if curl -sf http://localhost:8009/v1/health; then
               echo "Health check passed!"
               exit 0
             fi

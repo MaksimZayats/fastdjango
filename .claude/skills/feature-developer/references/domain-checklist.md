@@ -415,7 +415,7 @@ def test_list_products(
 ) -> None:
     user = user_factory()
     with test_client_factory(auth_for_user=user) as test_client:
-        response = test_client.get("/api/v1/products/")
+        response = test_client.get("/v1/products/")
 
     assert response.status_code == HTTPStatus.OK
     data = response.json()
@@ -431,7 +431,7 @@ def test_create_product(
     user = user_factory()
     with test_client_factory(auth_for_user=user) as test_client:
         response = test_client.post(
-            "/api/v1/products/",
+            "/v1/products/",
             json={
                 "name": "New Product",
                 "description": "A new product",
@@ -451,7 +451,7 @@ def test_get_product_not_found(
 ) -> None:
     user = user_factory()
     with test_client_factory(auth_for_user=user) as test_client:
-        response = test_client.get("/api/v1/products/999")
+        response = test_client.get("/v1/products/999")
 
     assert response.status_code == HTTPStatus.NOT_FOUND
 ```

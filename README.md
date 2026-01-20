@@ -143,12 +143,12 @@ This runs one-time setup tasks:
 make dev
 ```
 
-The API is available at `http://localhost:8000` with interactive docs at `/api/docs`.
+The API is available at `http://localhost:8000` with interactive docs at `/docs`.
 
 ## Verify Installation
 
 ```bash
-curl http://localhost:8000/api/v1/health
+curl http://localhost:8000/v1/health
 ```
 
 Expected response:
