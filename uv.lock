@@ -649,7 +649,7 @@ wheels = [
 
 [[package]]
 name = "icecream"
-version = "2.1.9"
+version = "2.1.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asttokens" },
@@ -657,9 +657,9 @@ dependencies = [
     { name = "executing" },
     { name = "pygments" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/77/3d/46c520ebfa5c7846a6a7b8beeb4499412a8d3db1df673911c724a3501c00/icecream-2.1.9.tar.gz", hash = "sha256:e47b6477d29848949ee5050127aeb88fd30f1908e5cf29772e8a1a0fcdf15473", size = 13924, upload-time = "2026-01-14T08:11:49.934Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/e2/3d064dfedbbc16687e0f56cd9b1d55e4e6dfd13d61b9435b61c250aaef3c/icecream-2.1.10.tar.gz", hash = "sha256:15900126ba7dbe1f83819583cbe5ff79a2943224600878d89307e4633b32e528", size = 13924, upload-time = "2026-01-21T07:34:17.652Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/38/4b3a3bfa1629a00e9eb364cb57f29c3e3d2666e0268102f7bffb9cfbe81a/icecream-2.1.9-py3-none-any.whl", hash = "sha256:07eac8b1ebd8a77ea9147b043d0ee642a0605678ce5b3c8e0e2e8cd3c918e6d3", size = 16360, upload-time = "2026-01-14T08:11:48.296Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/4f/91c4ee1af60bb4b2519540fd46fb56dfc70ede0cf3d97f57aff62d61190b/icecream-2.1.10-py3-none-any.whl", hash = "sha256:6b0ae3e899de12954cd26d8611dcff86518ff19f40deef333427da2ccf4036b2", size = 16373, upload-time = "2026-01-21T07:34:15.801Z" },
 ]
 
 [[package]]
