@@ -56,7 +56,9 @@ abstract when any effective accessor is abstract; concrete component overrides u
 Exact `property(...)` assignments map positional or `fget`/`fset`/`fdel` project functions and inline
 lambdas to the same accessor model and create a fresh descriptor shadow. Class-body aliases of
 `property`, `staticmethod`, and `classmethod` are followed in source order; a custom shadow or a
-control-flow-ambiguous wrapper is not treated as the corresponding built-in.
+control-flow-ambiguous wrapper is not treated as the corresponding built-in. Literal conditions and
+exact `typing.TYPE_CHECKING` or `typing_extensions.TYPE_CHECKING` sentinels select their reachable
+branch; unknown conditions remain merged.
 Inherited behavior has one diagnostic owner. Statically called nested
 and module-local helper bodies are followed. Dormant nested function, class, and lambda bodies are not
 attributed to the enclosing behavior; their definition-time expressions are. Project-specific wrappers

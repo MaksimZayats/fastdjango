@@ -302,6 +302,90 @@ def test_reachable_module_pytest_outcome_disables_container_evidence(
 
 
 @pytest.mark.parametrize(
+    ("outcome", "handler"),
+    [
+        ("pytest.skip('disabled', allow_module_level=True)", "except BaseException:"),
+        ("pytest.xfail('disabled')", "except:"),
+    ],
+)
+def test_compatible_module_handler_catches_pytest_outcome_for_container_evidence(
+    tmp_path: Path,
+    outcome: str,
+    handler: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\ntry:\n    {outcome}\n{handler}\n    pass\n\n{_test_source()}",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "pytest.skip('disabled', allow_module_level=True)",
+        "pytest.xfail('disabled')",
+    ],
+)
+def test_exception_module_handler_does_not_catch_pytest_outcome_for_container_evidence(
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\ntry:\n    {outcome}\nexcept Exception:\n    pass\n\n{_test_source()}",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    ("handler", "finally_body", "is_valid"),
+    [
+        ("except BaseException:", "    cleanup = None\n", True),
+        ("except BaseException:", "    pytest.xfail('disabled')\n", False),
+        ("except Exception:", "    cleanup = None\n", False),
+    ],
+)
+def test_module_pytest_outcome_handlers_preserve_finally_semantics_for_container_evidence(
+    tmp_path: Path,
+    handler: str,
+    finally_body: str,
+    is_valid: bool,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "try:\n"
+        "    pytest.skip('disabled', allow_module_level=True)\n"
+        f"{handler}\n"
+        "    pass\n"
+        "finally:\n"
+        f"{finally_body}\n"
+        f"{_test_source()}",
+    )
+
+    violations = _check(tmp_path).violations
+    assert (violations == ()) is is_valid
+
+
+@pytest.mark.parametrize(
     "dead_outcome",
     [
         "if False:\n    pytest.skip('disabled', allow_module_level=True)\n",

@@ -62,7 +62,9 @@ markers disable evidence. Statically false conditional markers remain eligible. 
 and calls after exhaustive return/raise control flow are unreachable. Runtime `pytest.skip()` and
 `pytest.xfail()` calls terminate evidence, including aliases and reachable short-circuit expressions;
 ordinary `except Exception` handlers do not catch those outcomes, while bare handlers and explicit
-`BaseException` handlers do. Reachable module-import calls to those APIs or
+`BaseException` handlers do, both at module import and inside tests. A compatible handler consumes
+the caught outcome, while its `finally` block still runs and may introduce a new terminal outcome.
+Reachable module-import calls to those APIs or
 `pytest.importorskip()` invalidate the integration module, including calls in class bodies, function
 decorators and defaults, lambda defaults, assignment aliases, and invoked local helper chains.
 Helper-local aliases follow source-order and rebinding semantics. Statically dead or short-circuited

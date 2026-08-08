@@ -218,6 +218,100 @@ def test_reachable_module_pytest_outcome_disables_migration_evidence(
 
 
 @pytest.mark.parametrize(
+    ("outcome", "handler"),
+    [
+        ("pytest.skip('disabled', allow_module_level=True)", "except BaseException:"),
+        ("pytest.xfail('disabled')", "except:"),
+    ],
+)
+def test_compatible_module_handler_catches_pytest_outcome_for_migration_evidence(
+    tmp_path: Path,
+    outcome: str,
+    handler: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "try:\n"
+        f"    {outcome}\n"
+        f"{handler}\n"
+        "    pass\n\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "pytest.skip('disabled', allow_module_level=True)",
+        "pytest.xfail('disabled')",
+    ],
+)
+def test_exception_module_handler_does_not_catch_pytest_outcome_for_migration_evidence(
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "try:\n"
+        f"    {outcome}\n"
+        "except Exception:\n"
+        "    pass\n\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _invalid_file(
+        _check(tmp_path),
+        "tests/integration/migrations/test_migrations.py",
+    )
+
+
+@pytest.mark.parametrize(
+    ("handler", "finally_body", "is_valid"),
+    [
+        ("except BaseException:", "    cleanup = None\n", True),
+        ("except BaseException:", "    pytest.xfail('disabled')\n", False),
+        ("except Exception:", "    cleanup = None\n", False),
+    ],
+)
+def test_module_pytest_outcome_handlers_preserve_finally_semantics_for_migration_evidence(
+    tmp_path: Path,
+    handler: str,
+    finally_body: str,
+    is_valid: bool,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "try:\n"
+        "    pytest.skip('disabled', allow_module_level=True)\n"
+        f"{handler}\n"
+        "    pass\n"
+        "finally:\n"
+        f"{finally_body}\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    violations = _check(tmp_path).violations
+    assert (violations == ()) is is_valid
+
+
+@pytest.mark.parametrize(
     "dead_outcome",
     [
         "if False:\n    pytest.skip('disabled', allow_module_level=True)\n",

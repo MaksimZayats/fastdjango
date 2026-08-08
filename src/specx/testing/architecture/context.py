@@ -1480,6 +1480,31 @@ def _flow_bindings_to_target(
                 current,
                 before_target=target,
             )
+            if (
+                isinstance(statement, ast.If)
+                and (truth := _flow_condition_truth(statement.test, branch_entry)) is not None
+            ):
+                branch = statement.body if truth else statement.orelse
+                if any(_contains_node(child, target) for child in branch):
+                    return _flow_bindings_to_target(
+                        branch,
+                        branch_entry,
+                        target=target,
+                        module_name=module_name,
+                    )
+                return branch_entry, True
+            if (
+                isinstance(statement, ast.While)
+                and _flow_condition_truth(statement.test, branch_entry) is False
+            ):
+                if any(_contains_node(child, target) for child in statement.orelse):
+                    return _flow_bindings_to_target(
+                        statement.orelse,
+                        branch_entry,
+                        target=target,
+                        module_name=module_name,
+                    )
+                return branch_entry, True
             if isinstance(statement, ast.Try):
                 if any(_contains_node(child, target) for child in statement.finalbody):
                     before_final = _flow_try_before_finally(
@@ -1553,6 +1578,14 @@ def _flow_statement_bindings(
             before_final,
             module_name=module_name,
         )
+    if (
+        isinstance(statement, ast.If)
+        and (truth := _flow_condition_truth(statement.test, current)) is not None
+    ):
+        branch = statement.body if truth else statement.orelse
+        return _flow_complete_block(branch, current, module_name=module_name)
+    if isinstance(statement, ast.While) and _flow_condition_truth(statement.test, current) is False:
+        return _flow_complete_block(statement.orelse, current, module_name=module_name)
     branches = _statement_branches(statement)
     if branches:
         branch_states = [
@@ -1563,6 +1596,34 @@ def _flow_statement_bindings(
         return _merge_binding_states(branch_states)
     _update_choice_binding(statement, current, module_name=module_name)
     return current
+
+
+def _flow_condition_truth(
+    expression: ast.expr,
+    bindings: dict[str, frozenset[str]],
+) -> bool | None:
+    return statically_known_condition(
+        expression,
+        qualified_names=_resolve_expression_choices(expression, bindings),
+    )
+
+
+def statically_known_condition(
+    expression: ast.expr,
+    *,
+    qualified_names: frozenset[str],
+) -> bool | None:
+    """Return truth for literal conditions and exact type-checking sentinels."""
+
+    if isinstance(expression, ast.Constant):
+        return bool(expression.value)
+    type_checking_names = {
+        "typing.TYPE_CHECKING",
+        "typing_extensions.TYPE_CHECKING",
+    }
+    if qualified_names and qualified_names <= type_checking_names:
+        return False
+    return None
 
 
 def _flow_statement_entry_bindings(

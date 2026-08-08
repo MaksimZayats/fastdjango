@@ -14,6 +14,7 @@ from specx.testing.architecture.context import (
     project_class_hierarchy,
     project_class_qualified_names,
     qualified_class_name,
+    statically_known_condition,
 )
 
 AMBIENT_EXACT_CALLS = frozenset(
@@ -1157,11 +1158,10 @@ def _class_condition_truth(
     path: Path,
     context: ArchitectureContext,
 ) -> bool | None:
-    if isinstance(expression, ast.Constant):
-        return bool(expression.value)
-    if context.qualified_names(path, expression) == frozenset({"typing.TYPE_CHECKING"}):
-        return False
-    return None
+    return statically_known_condition(
+        expression,
+        qualified_names=context.qualified_names(path, expression),
+    )
 
 
 def _attached_method_expression(

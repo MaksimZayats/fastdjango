@@ -46,4 +46,6 @@ overrides inherited from an explicitly selected project base or mixin. Abstractn
 the effective getter, setter, and deleter components before concrete services are checked. Accessors
 supplied through exact `property(...)` positional or `fget`/`fset`/`fdel` arguments receive the same
 descriptor exemption. Class-body aliases of `property`, `staticmethod`, and `classmethod` are resolved
-in source order; custom shadows and ambiguous branch bindings are not classified as built-ins.
+in source order. Literal and exact `typing.TYPE_CHECKING` or `typing_extensions.TYPE_CHECKING`
+conditions select the reachable branch; custom shadows and bindings from unknown branches are not
+classified as built-ins.

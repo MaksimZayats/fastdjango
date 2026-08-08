@@ -778,15 +778,22 @@ def _statement_exit_kinds(
                 )
             )
         if "pytest-outcome" in body_outcomes:
-            before_finally.update(
-                outcome
-                for handler in statement.handlers
-                if _handler_catches_pytest_outcome(handler)
-                for outcome in _block_exit_kinds(
-                    handler.body,
-                    terminal_call_ids=terminal_call_ids,
-                )
+            compatible_handler = next(
+                (
+                    handler
+                    for handler in statement.handlers
+                    if _handler_catches_pytest_outcome(handler)
+                ),
+                None,
             )
+            if compatible_handler is not None:
+                before_finally.discard("pytest-outcome")
+                before_finally.update(
+                    _block_exit_kinds(
+                        compatible_handler.body,
+                        terminal_call_ids=terminal_call_ids,
+                    )
+                )
         final_outcomes = _block_exit_kinds(
             statement.finalbody,
             terminal_call_ids=terminal_call_ids,

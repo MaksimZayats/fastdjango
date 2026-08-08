@@ -898,35 +898,57 @@ def _flow_try(
         visited=visited,
         batch_aliases=batch_aliases,
     )
-    only_pytest_outcomes = bool(body_paths) and all(
-        path.termination == "pytest-outcome" for path in body_paths
+    pytest_outcome_paths = tuple(
+        path for path in body_paths if path.termination == "pytest-outcome"
     )
-    eligible_handlers = (
-        tuple(handler for handler in statement.handlers if _handler_catches_pytest_outcome(handler))
-        if only_pytest_outcomes
-        else tuple(statement.handlers)
+    compatible_handler = next(
+        (handler for handler in statement.handlers if _handler_catches_pytest_outcome(handler)),
+        None,
     )
-    handler_paths = tuple(
-        path
-        for handler in eligible_handlers
-        for path in _flow_block(
-            handler.body,
-            paths,
-            scope=scope,
-            bindings=bindings,
-            functions=functions,
-            visited=visited,
-            batch_aliases=batch_aliases,
+    caught_pytest_paths = (
+        tuple(
+            caught_path
+            for path in pytest_outcome_paths
+            for caught_path in _flow_block(
+                compatible_handler.body,
+                (_EvidencePath(path.evidence),),
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
         )
+        if compatible_handler is not None
+        else pytest_outcome_paths
+    )
+    handler_paths = (
+        tuple(
+            path
+            for handler in statement.handlers
+            for path in _flow_block(
+                handler.body,
+                paths,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
+        )
+        if any(path.termination != "pytest-outcome" for path in body_paths)
+        else ()
     )
     carried = _deduplicate_paths(
         (
             *normal_paths,
+            *caught_pytest_paths,
             *handler_paths,
             *(
                 path
                 for path in non_normal_body
-                if path.termination != "raise" or not statement.handlers
+                if path.termination not in {"raise", "pytest-outcome"}
+                or (path.termination == "raise" and not statement.handlers)
             ),
         )
     )
