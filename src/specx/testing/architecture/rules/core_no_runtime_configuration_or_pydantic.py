@@ -41,7 +41,12 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
         )
         project_pydantic_names = _project_subclasses_of(
             context,
-            exact_bases={"pydantic.BaseModel"},
+            exact_bases={
+                "pydantic.BaseModel",
+                "pydantic.RootModel",
+                "pydantic.root_model.RootModel",
+            },
+            exact_decorators={"pydantic.dataclasses.dataclass"},
         )
         for path in sorted(context.ast_project.files):
             if not path.is_relative_to(core_root):
@@ -170,7 +175,9 @@ def _project_subclasses_of(
     context: ArchitectureContext,
     *,
     exact_bases: set[str],
+    exact_decorators: set[str] | None = None,
 ) -> set[str]:
+    exact_decorators = exact_decorators or set()
     classes = {
         qualified_class_name(node, source_path=path, context=context): (
             path,
@@ -180,7 +187,18 @@ def _project_subclasses_of(
         for node in context.tree(path).body
         if isinstance(node, ast.ClassDef)
     }
-    subclasses: set[str] = set()
+    subclasses = {
+        qualified_name
+        for qualified_name, (path, node) in classes.items()
+        if any(
+            context.qualified_name(
+                path,
+                decorator.func if isinstance(decorator, ast.Call) else decorator,
+            )
+            in exact_decorators
+            for decorator in node.decorator_list
+        )
+    }
     changed = True
     while changed:
         changed = False
@@ -191,6 +209,41 @@ def _project_subclasses_of(
             if resolved_bases & (exact_bases | subclasses):
                 subclasses.add(qualified_name)
                 changed = True
+    changed = True
+    while changed:
+        changed = False
+        for path in context.source_paths():
+            module = ".".join(
+                (
+                    context.config.package_name,
+                    *path.relative_to(context.src_root).with_suffix("").parts,
+                )
+            )
+            for statement in context.tree(path).body:
+                alias_name: str | None = None
+                value: ast.expr | None = None
+                type_alias_name = getattr(statement, "name", None)
+                type_alias_value = getattr(statement, "value", None)
+                if (
+                    type(statement).__name__ == "TypeAlias"
+                    and isinstance(type_alias_name, ast.Name)
+                    and isinstance(type_alias_value, ast.expr)
+                ):
+                    alias_name, value = type_alias_name.id, type_alias_value
+                elif (
+                    isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                ):
+                    alias_name, value = statement.targets[0].id, statement.value
+                if alias_name is None or value is None:
+                    continue
+                qualified_alias = f"{module}.{alias_name}"
+                if qualified_alias in subclasses:
+                    continue
+                if context.qualified_name(path, value) in exact_bases | subclasses:
+                    subclasses.add(qualified_alias)
+                    changed = True
     return subclasses
 
 

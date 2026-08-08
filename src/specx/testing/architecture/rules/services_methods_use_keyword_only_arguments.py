@@ -26,6 +26,7 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
         definition_index = class_definition_base_index(context)
         service_bases = {"BasePureService", "BaseReadService", "BaseEffectService"}
         findings: list[SpecxArchitectureViolation] = []
+        checked_declarations: set[tuple[Path, int]] = set()
         for path in context.source_paths():
             for class_node in (
                 node for node in ast.walk(context.tree(path)) if isinstance(node, ast.ClassDef)
@@ -55,6 +56,10 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
                         and child.name not in seen_methods
                     ):
                         seen_methods.add(method.name)
+                        declaration = (method_path, id(method))
+                        if declaration in checked_declarations:
+                            continue
+                        checked_declarations.add(declaration)
                         findings.extend(
                             _method_findings(
                                 self.id,

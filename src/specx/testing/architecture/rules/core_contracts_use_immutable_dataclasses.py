@@ -43,13 +43,13 @@ class CoreContractsUseImmutableDataclassesRule(ArchitectureRuleBase):
                         for item in node.decorator_list
                         if (
                             isinstance(item, ast.Name)
-                            and context.qualified_name(path, item).endswith("dataclasses.dataclass")
+                            and context.qualified_names(path, item)
+                            == frozenset({"dataclasses.dataclass"})
                         )
                         or (
                             isinstance(item, ast.Call)
-                            and context.qualified_name(path, item.func).endswith(
-                                "dataclasses.dataclass"
-                            )
+                            and context.qualified_names(path, item.func)
+                            == frozenset({"dataclasses.dataclass"})
                         )
                     ),
                     None,

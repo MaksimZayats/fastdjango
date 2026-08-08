@@ -407,9 +407,10 @@ def uow_manager_context_count(
 def injected_type_name(annotation: ast.expr | None, aliases: dict[str, str]) -> str:
     if annotation is None:
         return ""
-    if isinstance(annotation, ast.Subscript) and annotation_name(
-        annotation.value, aliases
-    ).endswith("Injected"):
+    if (
+        isinstance(annotation, ast.Subscript)
+        and annotation_name(annotation.value, aliases) == "Injected"
+    ):
         return annotation_name(annotation.slice, aliases)
     return ""
 
@@ -1016,9 +1017,28 @@ def qualified_symbol_binding_choices(
 
     deterministic = qualified_symbol_bindings(context, path, at_node=None)
     choices = {name: frozenset({value}) for name, value in deterministic.items()}
-    if at_node is None or _is_definition_time_expression(context.tree(path), at_node):
+    if at_node is None:
+        return choices
+    if _is_definition_time_expression(context.tree(path), at_node):
+        module_name = (
+            _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
+        )
+        choices, _found = _flow_bindings_to_target(
+            context.tree(path).body,
+            {},
+            target=at_node,
+            module_name=module_name,
+        )
+        choices = {
+            name: frozenset(
+                _module_qualified_choice(value, module_name=module_name) for value in values
+            )
+            for name, values in choices.items()
+        }
         exact = qualified_symbol_bindings(context, path, at_node=at_node)
-        return {name: frozenset({value}) for name, value in exact.items()}
+        for name, value in exact.items():
+            choices.setdefault(name, frozenset({value}))
+        return choices
     module_name = (
         _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
     )
@@ -1181,6 +1201,31 @@ def _flow_bindings_to_target(
     current = dict(state)
     for statement in statements:
         if _contains_node(statement, target):
+            if isinstance(statement, ast.Try):
+                if any(_contains_node(child, target) for child in statement.finalbody):
+                    before_final = _flow_try_before_finally(
+                        statement,
+                        current,
+                        module_name=module_name,
+                    )
+                    return _flow_bindings_to_target(
+                        statement.finalbody,
+                        before_final,
+                        target=target,
+                        module_name=module_name,
+                    )
+                if any(_contains_node(child, target) for child in statement.orelse):
+                    body_state = _flow_complete_block(
+                        statement.body,
+                        current,
+                        module_name=module_name,
+                    )
+                    return _flow_bindings_to_target(
+                        statement.orelse,
+                        body_state,
+                        target=target,
+                        module_name=module_name,
+                    )
             for branch in _statement_branches(statement):
                 if any(_contains_node(child, target) for child in branch):
                     return _flow_bindings_to_target(
@@ -1208,6 +1253,17 @@ def _flow_statement_bindings(
             for name in _stored_names(target):
                 current[name] = values or frozenset({f"<local>.{name}"})
         return current
+    if isinstance(statement, ast.Try):
+        before_final = _flow_try_before_finally(
+            statement,
+            current,
+            module_name=module_name,
+        )
+        return _flow_complete_block(
+            statement.finalbody,
+            before_final,
+            module_name=module_name,
+        )
     branches = _statement_branches(statement)
     if branches:
         branch_states = [
@@ -1220,6 +1276,26 @@ def _flow_statement_bindings(
     return current
 
 
+def _flow_try_before_finally(
+    statement: ast.Try,
+    state: dict[str, frozenset[str]],
+    *,
+    module_name: str,
+) -> dict[str, frozenset[str]]:
+    body_state = _flow_complete_block(statement.body, state, module_name=module_name)
+    if body_state:
+        body_state = _flow_complete_block(
+            statement.orelse,
+            body_state,
+            module_name=module_name,
+        )
+    handler_states = [
+        _flow_complete_block(handler.body, body_state or state, module_name=module_name)
+        for handler in statement.handlers
+    ]
+    return _merge_binding_states([body_state, *handler_states])
+
+
 def _flow_complete_block(
     statements: list[ast.stmt],
     state: dict[str, frozenset[str]],
@@ -1228,10 +1304,20 @@ def _flow_complete_block(
 ) -> dict[str, frozenset[str]]:
     current = dict(state)
     for statement in statements:
-        if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+        if isinstance(statement, ast.Return):
             return {}
+        if isinstance(statement, (ast.Raise, ast.Break, ast.Continue)):
+            return current
         current = _flow_statement_bindings(statement, current, module_name=module_name)
     return current
+
+
+def _module_qualified_choice(value: str, *, module_name: str) -> str:
+    for prefix in ("<local-class>.", "<local>."):
+        if value.startswith(prefix):
+            suffix = value.removeprefix(prefix)
+            return f"{module_name}.{suffix}" if module_name else suffix
+    return value
 
 
 def _statement_branches(statement: ast.stmt) -> tuple[list[ast.stmt], ...]:
@@ -1242,12 +1328,7 @@ def _statement_branches(statement: ast.stmt) -> tuple[list[ast.stmt], ...]:
     if isinstance(statement, (ast.With, ast.AsyncWith)):
         return (statement.body,)
     if isinstance(statement, ast.Try):
-        return (
-            statement.body,
-            *(handler.body for handler in statement.handlers),
-            statement.orelse,
-            statement.finalbody,
-        )
+        return (statement.body, *(handler.body for handler in statement.handlers))
     if isinstance(statement, ast.Match):
         return tuple(case.body for case in statement.cases)
     return ()
@@ -1292,9 +1373,10 @@ def _update_choice_binding(
     module_name: str,
 ) -> None:
     deterministic = {name: next(iter(values)) for name, values in bindings.items() if values}
+    before = dict(deterministic)
     _update_lexical_binding(node, deterministic, module_name=module_name, local_scope=True)
     for name, value in deterministic.items():
-        if name not in bindings:
+        if before.get(name) != value:
             bindings[name] = frozenset({value})
 
 
@@ -1349,6 +1431,16 @@ def _update_lexical_binding(
     module_name: str,
     local_scope: bool,
 ) -> None:
+    type_alias_name = getattr(node, "name", None)
+    if type(node).__name__ == "TypeAlias" and isinstance(type_alias_name, ast.Name):
+        bindings[type_alias_name.id] = (
+            f"<local>.{type_alias_name.id}"
+            if local_scope
+            else f"{module_name}.{type_alias_name.id}"
+            if module_name
+            else type_alias_name.id
+        )
+        return
     if isinstance(node, (ast.Import, ast.ImportFrom)):
         _update_import_bindings(node, bindings, module_name=module_name)
         return

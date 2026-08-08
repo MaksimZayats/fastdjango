@@ -7,6 +7,7 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     class_definition_base_index,
     class_has_foundation_base_at,
+    class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -40,7 +41,6 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         definition_index = class_definition_base_index(context)
         findings: list[SpecxArchitectureViolation] = []
-        scanned_methods: set[tuple[Path, int]] = set()
         for path in context.source_paths():
             tree = context.tree(path)
             for class_node in (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)):
@@ -50,8 +50,13 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
                     source_path=path,
                     context=context,
                     definition_index=definition_index,
+                ) or class_is_statically_abstract_at(
+                    class_node,
+                    source_path=path,
+                    context=context,
                 ):
                     continue
+                seen_methods: set[str] = set()
                 for method_path, method_owner in class_hierarchy(
                     class_node,
                     path=path,
@@ -62,27 +67,36 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
                         for child in method_owner.body
                         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
                         and not child.name.startswith("__")
+                        and child.name not in seen_methods
                     ):
-                        method_key = (method_path, id(function))
-                        if method_key in scanned_methods:
-                            continue
-                        scanned_methods.add(method_key)
+                        seen_methods.add(function.name)
                         findings.extend(
                             self._check_method(
                                 context,
                                 path=method_path,
-                                class_node=method_owner,
+                                use_case_path=path,
+                                use_case_class=class_node,
                                 function=function,
                             )
                         )
-        return tuple(findings)
+        unique: dict[
+            tuple[Path | None, int | None, int | None, str],
+            SpecxArchitectureViolation,
+        ] = {}
+        for finding in findings:
+            unique.setdefault(
+                (finding.path, finding.line, finding.column, finding.message),
+                finding,
+            )
+        return tuple(unique.values())
 
     def _check_method(
         self,
         context: ArchitectureContext,
         *,
         path: Path,
-        class_node: ast.ClassDef,
+        use_case_path: Path,
+        use_case_class: ast.ClassDef,
         function: ast.FunctionDef | ast.AsyncFunctionDef,
     ) -> list[SpecxArchitectureViolation]:
         findings: list[SpecxArchitectureViolation] = []
@@ -93,7 +107,8 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
                 path=path,
                 context=context,
                 function=function,
-                class_node=class_node,
+                class_node=use_case_class,
+                class_path=use_case_path,
             ):
                 continue
             if (
@@ -110,16 +125,17 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
             if call_is_injected_collaborator_or_uow(
                 call,
                 function=function,
-                class_node=class_node,
+                class_node=use_case_class,
                 path=path,
                 context=context,
+                class_path=use_case_path,
             ):
                 continue
             findings.append(
                 violation(
                     self.id,
                     path=path,
-                    symbol=class_node.name,
+                    symbol=use_case_class.name,
                     node=call,
                     message=(
                         f"direct call {qualified_name!r} is not an approved "

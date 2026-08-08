@@ -73,7 +73,11 @@ class TestsCoreBehaviorResolvesFromContainerRule(ArchitectureRuleBase):
                 if (
                     test_tree is None
                     or not native_container_available
-                    or _defines_local_container(test_tree)
+                    or _defines_container_fixture(
+                        test_tree,
+                        path=test_path,
+                        context=context,
+                    )
                     or _has_shadowing_container_fixture(
                         context,
                         test_path=test_path,
@@ -160,29 +164,20 @@ def _has_native_container_fixture(
     if path not in context.ast_project.files:
         return False
     tree = context.tree(path)
-    for function in (
+    fixtures = tuple(
         node
         for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "container"
-    ):
-        if not any(
-            context.qualified_name(
-                path, decorator.func if isinstance(decorator, ast.Call) else decorator
-            ).endswith("pytest.fixture")
-            for decorator in function.decorator_list
-        ):
-            continue
-        for statement in function.body:
-            value = statement.value if isinstance(statement, (ast.Return, ast.Expr)) else None
-            if isinstance(value, (ast.Yield, ast.YieldFrom)):
-                value = value.value
-            if (
-                isinstance(value, ast.Call)
-                and context.qualified_name(path, value.func)
-                == f"{context.config.package_name}.ioc.container.get_container"
-            ):
-                return True
-    return False
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _fixture_exposed_name(node, path=path, context=context) == "container"
+    )
+    return bool(fixtures) and all(
+        _fixture_has_native_container_provenance(
+            function,
+            path=path,
+            context=context,
+        )
+        for function in fixtures
+    )
 
 
 def _has_shadowing_container_fixture(
@@ -194,18 +189,174 @@ def _has_shadowing_container_fixture(
     parent = test_path.parent
     while parent != unit_root and parent.is_relative_to(unit_root):
         conftest = parent / "conftest.py"
-        if conftest in context.ast_project.files and _defines_local_container(
-            context.tree(conftest)
+        if conftest in context.ast_project.files and _defines_container_fixture(
+            context.tree(conftest),
+            path=conftest,
+            context=context,
         ):
             return True
         parent = parent.parent
     return False
 
 
-def _defines_local_container(tree: ast.Module) -> bool:
+def _defines_container_fixture(
+    tree: ast.Module,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
     return any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "container"
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _fixture_exposed_name(node, path=path, context=context) == "container"
         for node in tree.body
+    )
+
+
+def _fixture_exposed_name(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> str | None:
+    for decorator in function.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if context.qualified_name(path, target) != "pytest.fixture":
+            continue
+        if not isinstance(decorator, ast.Call):
+            return function.name
+        explicit_name = next(
+            (keyword.value for keyword in decorator.keywords if keyword.arg == "name"),
+            None,
+        )
+        if explicit_name is None:
+            return function.name
+        if isinstance(explicit_name, ast.Constant) and isinstance(explicit_name.value, str):
+            return explicit_name.value
+        return None
+    return None
+
+
+def _fixture_has_native_container_provenance(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    outcomes = _reachable_fixture_outcomes(function.body)
+    return bool(outcomes) and all(
+        _is_direct_project_container_call(
+            outcome.value,
+            path=path,
+            context=context,
+        )
+        for outcome in outcomes
+    )
+
+
+def _reachable_fixture_outcomes(
+    statements: list[ast.stmt],
+) -> tuple[ast.Return | ast.Yield | ast.YieldFrom, ...]:
+    outcomes: list[ast.Return | ast.Yield | ast.YieldFrom] = []
+    reachable = True
+    for statement in statements:
+        if not reachable:
+            break
+        statement_outcomes, reachable = _fixture_statement_outcomes(statement)
+        outcomes.extend(statement_outcomes)
+    return tuple(outcomes)
+
+
+def _fixture_statement_outcomes(
+    statement: ast.stmt,
+) -> tuple[tuple[ast.Return | ast.Yield | ast.YieldFrom, ...], bool]:
+    if isinstance(statement, ast.Return):
+        return (statement, *_yield_nodes(statement.value)), False
+    if isinstance(statement, ast.Raise):
+        return _yield_nodes(statement.exc), False
+    if isinstance(statement, ast.If):
+        if _is_statically_false(statement.test):
+            return _fixture_block_outcomes(statement.orelse)
+        if _is_statically_true(statement.test):
+            return _fixture_block_outcomes(statement.body)
+        body_outcomes, body_reachable = _fixture_block_outcomes(statement.body)
+        else_outcomes, else_reachable = _fixture_block_outcomes(statement.orelse)
+        return (*body_outcomes, *else_outcomes), body_reachable or else_reachable
+    if isinstance(statement, ast.While) and _is_statically_false(statement.test):
+        return _fixture_block_outcomes(statement.orelse)
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return _fixture_block_outcomes(statement.body)
+    if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+        body_outcomes, _body_reachable = _fixture_block_outcomes(statement.body)
+        else_outcomes, _else_reachable = _fixture_block_outcomes(statement.orelse)
+        return (*body_outcomes, *else_outcomes), True
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return (), True
+    if isinstance(statement, ast.Try):
+        blocks = (
+            statement.body,
+            *(handler.body for handler in statement.handlers),
+            statement.orelse,
+            statement.finalbody,
+        )
+        outcomes = tuple(
+            outcome for block in blocks for outcome in _fixture_block_outcomes(block)[0]
+        )
+        return outcomes, True
+    if isinstance(statement, ast.Match):
+        return (
+            tuple(
+                outcome
+                for case in statement.cases
+                for outcome in _fixture_block_outcomes(case.body)[0]
+            ),
+            True,
+        )
+    return _yield_nodes(statement), True
+
+
+def _fixture_block_outcomes(
+    statements: list[ast.stmt],
+) -> tuple[tuple[ast.Return | ast.Yield | ast.YieldFrom, ...], bool]:
+    outcomes: list[ast.Return | ast.Yield | ast.YieldFrom] = []
+    reachable = True
+    for statement in statements:
+        if not reachable:
+            break
+        statement_outcomes, reachable = _fixture_statement_outcomes(statement)
+        outcomes.extend(statement_outcomes)
+    return tuple(outcomes), reachable
+
+
+def _yield_nodes(expression: ast.AST | None) -> tuple[ast.Yield | ast.YieldFrom, ...]:
+    if expression is None:
+        return ()
+    yields: list[ast.Yield | ast.YieldFrom] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not expression and isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+        ):
+            return
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            yields.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(expression)
+    return tuple(yields)
+
+
+def _is_direct_project_container_call(
+    value: ast.expr | None,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    return (
+        isinstance(value, ast.Call)
+        and context.qualified_name(path, value.func)
+        == f"{context.config.package_name}.ioc.container.get_container"
     )
 
 
@@ -287,11 +438,11 @@ def _executable_function_nodes(
         ):
             return
         nodes.append(node)
-        if isinstance(node, ast.If) and _is_statically_false(node.test):
+        if isinstance(node, (ast.If, ast.While)) and _is_statically_false(node.test):
             for statement in node.orelse:
                 visit(statement)
             return
-        if isinstance(node, ast.If) and _is_statically_true(node.test):
+        if isinstance(node, (ast.If, ast.While)) and _is_statically_true(node.test):
             for statement in node.body:
                 visit(statement)
             return
@@ -303,8 +454,18 @@ def _executable_function_nodes(
 
 
 def _is_statically_false(expression: ast.expr) -> bool:
-    return (isinstance(expression, ast.Constant) and expression.value is False) or (
-        isinstance(expression, ast.Name) and expression.id == "TYPE_CHECKING"
+    return (
+        (
+            isinstance(expression, ast.Constant)
+            and (expression.value is False or expression.value == 0)
+        )
+        or (isinstance(expression, ast.Name) and expression.id == "TYPE_CHECKING")
+        or (
+            isinstance(expression, ast.Attribute)
+            and isinstance(expression.value, ast.Name)
+            and expression.value.id == "typing"
+            and expression.attr == "TYPE_CHECKING"
+        )
     )
 
 

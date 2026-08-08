@@ -7,6 +7,7 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     class_definition_base_index,
     class_has_foundation_base_at,
+    class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -39,13 +40,17 @@ class CoreBehaviorNoAmbientRuntimeAccessRule(ArchitectureRuleBase):
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         definition_index = class_definition_base_index(context)
         findings: list[SpecxArchitectureViolation] = []
-        scanned_methods: set[tuple[Path, int]] = set()
         for path in context.source_paths():
             tree = context.tree(path)
             behavior_classes = [
                 node
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ClassDef)
+                and not class_is_statically_abstract_at(
+                    node,
+                    source_path=path,
+                    context=context,
+                )
                 and (
                     class_has_foundation_base_at(
                         node,
@@ -67,30 +72,30 @@ class CoreBehaviorNoAmbientRuntimeAccessRule(ArchitectureRuleBase):
                 )
             ]
             for behavior_class in behavior_classes:
-                for method_path, class_node in class_hierarchy(
+                seen_methods: set[str] = set()
+                for method_path, method_owner in class_hierarchy(
                     behavior_class,
                     path=path,
                     context=context,
                 ):
                     for function in (
                         child
-                        for child in class_node.body
+                        for child in method_owner.body
                         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and child.name not in seen_methods
                     ):
-                        method_key = (method_path, id(function))
-                        if method_key in scanned_methods:
-                            continue
-                        scanned_methods.add(method_key)
+                        seen_methods.add(function.name)
                         findings.extend(
                             _ambient_method_findings(
                                 self.id,
                                 context=context,
                                 path=method_path,
-                                class_node=class_node,
+                                behavior_path=path,
+                                behavior_class=behavior_class,
                                 function=function,
                             )
                         )
-        return tuple(findings)
+        return _deduplicate_declaration_findings(findings)
 
 
 def _ambient_method_findings(
@@ -98,32 +103,45 @@ def _ambient_method_findings(
     *,
     context: ArchitectureContext,
     path: Path,
-    class_node: ast.ClassDef,
+    behavior_path: Path,
+    behavior_class: ast.ClassDef,
     function: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> list[SpecxArchitectureViolation]:
     findings: list[SpecxArchitectureViolation] = []
-    ambient_calls: list[ast.Call] = []
-    for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
-        if is_ambient_runtime_call(
+    ambient_candidates = [
+        call
+        for call in ast.walk(function)
+        if isinstance(call, ast.Call)
+        and is_ambient_runtime_call(
             call,
             path=path,
             context=context,
             function=function,
-            class_node=class_node,
-        ):
-            ambient_calls.append(call)
-            findings.append(
-                violation(
-                    rule_id,
-                    path=path,
-                    symbol=class_node.name,
-                    node=call,
-                    message=(
-                        "direct ambient runtime call "
-                        f"{resolved_call_name(call, path=path, context=context)!r}"
-                    ),
-                )
+            class_node=behavior_class,
+            class_path=behavior_path,
+        )
+    ]
+    ambient_calls = [
+        call
+        for call in ambient_candidates
+        if not any(
+            call is not outer and any(call is node for node in ast.walk(outer))
+            for outer in ambient_candidates
+        )
+    ]
+    for call in ambient_calls:
+        findings.append(
+            violation(
+                rule_id,
+                path=path,
+                symbol=behavior_class.name,
+                node=call,
+                message=(
+                    "direct ambient runtime call "
+                    f"{resolved_call_name(call, path=path, context=context)!r}"
+                ),
             )
+        )
     tree = context.tree(path)
     for node in ambient_environment_nodes(tree, path=path, context=context):
         if any(node in ast.walk(call) for call in ambient_calls):
@@ -133,18 +151,20 @@ def _ambient_method_findings(
                 violation(
                     rule_id,
                     path=path,
-                    symbol=class_node.name,
+                    symbol=behavior_class.name,
                     node=node,
                     message="direct environment-state access 'os.environ'",
                 )
             )
     for node in ambient_runtime_value_nodes(tree, path=path, context=context):
+        if any(node in ast.walk(call) for call in ambient_calls):
+            continue
         if any(node is descendant for descendant in ast.walk(function)):
             findings.append(
                 violation(
                     rule_id,
                     path=path,
-                    symbol=class_node.name,
+                    symbol=behavior_class.name,
                     node=node,
                     message=(
                         f"direct ambient runtime value {context.qualified_name(path, node)!r}"
@@ -152,3 +172,18 @@ def _ambient_method_findings(
                 )
             )
     return findings
+
+
+def _deduplicate_declaration_findings(
+    findings: list[SpecxArchitectureViolation],
+) -> tuple[SpecxArchitectureViolation, ...]:
+    unique: dict[
+        tuple[Path | None, int | None, int | None, str],
+        SpecxArchitectureViolation,
+    ] = {}
+    for finding in findings:
+        unique.setdefault(
+            (finding.path, finding.line, finding.column, finding.message),
+            finding,
+        )
+    return tuple(unique.values())

@@ -875,6 +875,26 @@ def test_abstract_and_mixin_behavior_methods_remain_enforced(tmp_path: Path) -> 
     assert len(report.violations) == 2
 
 
+def test_effective_behavior_methods_respect_safe_overrides(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "foundation/runtime_mixin.py"),
+        "import os\n\n"
+        "class RuntimeMixin(object):\n"
+        "    def token(self, *, size: int) -> bytes: return os.urandom(size)\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/token.py"),
+        "from demo_service.foundation.runtime_mixin import RuntimeMixin\n"
+        "from specx.core.foundation.effect_service import BaseEffectService\n\n"
+        "class TokenService(RuntimeMixin, BaseEffectService):\n"
+        "    def token(self, *, size: int) -> bytes: return bytes(size)\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS)
+
+    assert report.violations == ()
+
+
 def test_service_signature_rule_checks_inherited_methods_and_varargs(tmp_path: Path) -> None:
     _write(
         _source(tmp_path, "foundation/price_mixin.py"),
@@ -981,6 +1001,26 @@ def test_alias_resolution_merges_branches_but_honors_unconditional_rebinding(
     assert report.violations[0].line == 9
 
 
+def test_alias_resolution_applies_try_state_before_finally(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "core/orders/services/token.py"),
+        "import os\n"
+        "from specx.core.foundation.effect_service import BaseEffectService\n\n"
+        "class TokenService(BaseEffectService):\n"
+        "    def issue(self, *, size: int) -> bytes:\n"
+        "        factory = bytes\n"
+        "        try:\n"
+        "            factory = os.urandom\n"
+        "        finally:\n"
+        "            token = factory(size)\n"
+        "        return token\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS)
+
+    assert len(report.violations) == 1
+
+
 def test_definition_time_aliases_ignore_later_rebinding(tmp_path: Path) -> None:
     _write(
         _source(tmp_path, "core/orders/dtos/order.py"),
@@ -1028,12 +1068,46 @@ def test_function_di_and_callable_policy_resolve_type_aliases(tmp_path: Path) ->
         "    def execute(self, *, query: object) -> str:\n"
         "        return self.formatter('order')\n",
     )
+    _write(
+        _source(tmp_path, "core/orders/use_cases/format_local.py"),
+        "from typing import Callable\n"
+        "from diwire import Injected\n"
+        "from specx.core.foundation.use_case import BaseUseCase\n\n"
+        "type LocalFormatter = Callable[[str], str]\n"
+        "class FormatLocalUseCase(BaseUseCase):\n"
+        "    formatter: Injected[LocalFormatter]\n"
+        "    def execute(self, *, query: object) -> str:\n"
+        "        return self.formatter('order')\n",
+    )
 
     injection = _check_only(tmp_path, SpecxRuleId.DIWIRE_NO_FUNCTION_INJECTION)
     orchestration = _check_only(tmp_path, SpecxRuleId.USE_CASES_ORCHESTRATE_THROUGH_COLLABORATORS)
 
     assert [item.symbol for item in injection.violations] == ["handler"]
-    assert len(orchestration.violations) == 1
+    assert len(orchestration.violations) == 2
+
+
+def test_inherited_use_case_method_uses_concrete_collaborator_fields(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "foundation/execution_mixin.py"),
+        "class ExecutionMixin(object):\n"
+        "    def execute(self, *, command):\n"
+        "        return self.service.run(command=command)\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/use_cases/action.py"),
+        "from diwire import Injected\n"
+        "from demo_service.foundation.execution_mixin import ExecutionMixin\n"
+        "from specx.core.foundation.use_case import BaseUseCase\n\n"
+        "class ActionService:\n"
+        "    def run(self, *, command): return command\n\n"
+        "class ActionUseCase(ExecutionMixin, BaseUseCase):\n"
+        "    service: Injected[ActionService]\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.USE_CASES_ORCHESTRATE_THROUGH_COLLABORATORS)
+
+    assert report.violations == ()
 
 
 def test_core_runtime_types_use_exact_ancestry_and_runtime_references(tmp_path: Path) -> None:
@@ -1044,7 +1118,8 @@ def test_core_runtime_types_use_exact_ancestry_and_runtime_references(tmp_path: 
         "class Request(PydanticModel): pass\n"
         "class AppConfig(BaseSettings): pass\n\n"
         "class BaseModel: pass\n"
-        "class DomainValue(BaseModel): pass\n",
+        "class DomainValue(BaseModel): pass\n"
+        "type RequestAlias = Request\n",
     )
     _write(
         _source(tmp_path, "core/orders/services/order.py"),
@@ -1052,6 +1127,7 @@ def test_core_runtime_types_use_exact_ancestry_and_runtime_references(tmp_path: 
         "from demo_service.contracts import AppConfig, DomainValue\n\n"
         "def build():\n"
         "    contracts.Request.model_validate({})\n"
+        "    contracts.RequestAlias.model_validate({})\n"
         "    AppConfig()\n"
         "    return DomainValue()\n",
     )
@@ -1060,6 +1136,40 @@ def test_core_runtime_types_use_exact_ancestry_and_runtime_references(tmp_path: 
 
     assert len(report.violations) == 2
     assert all("DomainValue" not in item.message for item in report.violations)
+
+
+def test_lambda_comprehension_and_local_import_shadow_ambient_globals(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "core/orders/services/clock.py"),
+        "import time\n"
+        "from specx.core.foundation.pure_service import BasePureService\n\n"
+        "class ClockService(BasePureService):\n"
+        "    def map(self, *, clocks):\n"
+        "        mapped = list(map(lambda time: time.time(), clocks))\n"
+        "        return [time.time() for time in clocks] + mapped\n"
+        "    def local(self):\n"
+        "        from demo_service.safe import time\n"
+        "        return time()\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS)
+
+    assert report.violations == ()
+
+
+def test_module_alias_of_ambient_value_remains_ambient(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "core/orders/services/argv.py"),
+        "import sys\n"
+        "from specx.core.foundation.effect_service import BaseEffectService\n\n"
+        "arguments = sys.argv\n"
+        "class ArgvService(BaseEffectService):\n"
+        "    def copy(self): return arguments.copy()\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS)
+
+    assert len(report.violations) == 1
 
 
 def test_ambient_policy_covers_process_path_locale_and_timezone_state(tmp_path: Path) -> None:

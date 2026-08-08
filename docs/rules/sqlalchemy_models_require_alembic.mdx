@@ -36,5 +36,7 @@ When a concrete model exists, parses Alembic configuration and Python imports fo
 configuration and migration calls, an invoked migration entrypoint, an operational revision, and
 upgrade-and-drift evidence in the same executable test body. It also shell-tokenizes `migrate`,
 `makemigrations`, and `migration-check` recipes and requires them to invoke Alembic directly;
-comments, `echo`, dead branches, and uncalled helpers do not count. Statically abstract declarative
-foundation classes do not activate the rule unless they declare a concrete table mapping.
+comments, `echo`, dead branches, rebound Alembic imports, and uncalled helpers do not count. Common
+direct runners such as `uv run --locked alembic`, `env NAME=value alembic`, and absolute Alembic
+executables count. Statically abstract declarative foundation classes do not activate the rule unless
+they declare a concrete table mapping.

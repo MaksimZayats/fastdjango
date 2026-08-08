@@ -9,10 +9,8 @@ from specx.testing.architecture.context import (
     active_uow_names_from_manager_fields,
     attribute_chain,
     class_injected_unit_of_work_manager_field_names,
-    injected_type_name,
     project_class_qualified_names,
     qualified_class_name,
-    self_attribute_root_name,
 )
 
 AMBIENT_EXACT_CALLS = frozenset(
@@ -185,9 +183,20 @@ def is_ambient_runtime_call(
     context: ArchitectureContext,
     function: ast.AsyncFunctionDef | ast.FunctionDef | None = None,
     class_node: ast.ClassDef | None = None,
+    class_path: Path | None = None,
 ) -> bool:
     names = resolved_call_names(call, path=path, context=context)
     if any(name in AMBIENT_EXACT_CALLS or name.startswith(AMBIENT_PREFIXES) for name in names):
+        return True
+    if any(
+        name.startswith(f"{ambient_value}.")
+        for name in names
+        for ambient_value in AMBIENT_VALUE_NAMES
+    ):
+        return True
+    if "datetime.date.fromtimestamp" in names:
+        return True
+    if "datetime.datetime.fromtimestamp" in names and _timezone_argument_is_ambient(call):
         return True
     name = resolved_call_name(call, path=path, context=context)
     if (
@@ -195,7 +204,17 @@ def is_ambient_runtime_call(
         and call.func.attr == "astimezone"
         and not call.args
         and not call.keywords
-        and any(name.startswith("datetime.") for name in names)
+        and (
+            any(name.startswith("datetime.") for name in names)
+            or _call_receiver_is_typed_datetime(
+                call,
+                function=function,
+                class_node=class_node,
+                path=path,
+                class_path=class_path,
+                context=context,
+            )
+        )
     ):
         return True
     chain = attribute_chain(call.func)
@@ -204,6 +223,7 @@ def is_ambient_runtime_call(
             function,
             class_node=class_node,
             path=path,
+            class_path=class_path,
             context=context,
         )
         if function is not None
@@ -220,11 +240,104 @@ def is_ambient_runtime_call(
     )
 
 
+def _timezone_argument_is_ambient(call: ast.Call) -> bool:
+    if len(call.args) >= 2:
+        return isinstance(call.args[1], ast.Constant) and call.args[1].value is None
+    timezone = next((keyword.value for keyword in call.keywords if keyword.arg == "tz"), None)
+    return timezone is None or (isinstance(timezone, ast.Constant) and timezone.value is None)
+
+
+def _call_receiver_is_typed_datetime(
+    call: ast.Call,
+    *,
+    function: ast.AsyncFunctionDef | ast.FunctionDef | None,
+    class_node: ast.ClassDef | None,
+    path: Path,
+    class_path: Path | None,
+    context: ArchitectureContext,
+) -> bool:
+    if function is None or not isinstance(call.func, ast.Attribute):
+        return False
+    receiver = attribute_chain(call.func.value)
+    if not receiver:
+        return False
+    roots = _typed_datetime_chains(
+        function,
+        class_node=class_node,
+        path=path,
+        class_path=class_path,
+        context=context,
+    )
+    return any(tuple(receiver[: len(root)]) == root for root in roots)
+
+
+def _typed_datetime_chains(
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+    *,
+    class_node: ast.ClassDef | None,
+    path: Path,
+    class_path: Path | None,
+    context: ArchitectureContext,
+) -> set[tuple[str, ...]]:
+    names: set[tuple[str, ...]] = {
+        (argument.arg,)
+        for argument in (
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        )
+        if _annotation_contains_datetime(argument.annotation, path=path, context=context)
+    }
+    if class_node is not None:
+        for node_path, hierarchy_node in class_hierarchy(
+            class_node,
+            path=class_path or path,
+            context=context,
+        ):
+            names.update(
+                ("self", child.target.id)
+                for child in hierarchy_node.body
+                if isinstance(child, ast.AnnAssign)
+                and isinstance(child.target, ast.Name)
+                and _annotation_contains_datetime(
+                    child.annotation,
+                    path=node_path,
+                    context=context,
+                )
+            )
+    names.update(
+        (node.target.id,)
+        for node in ast.walk(function)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and _annotation_contains_datetime(node.annotation, path=path, context=context)
+    )
+    return names
+
+
+def _annotation_contains_datetime(
+    annotation: ast.expr | None,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    if annotation is None:
+        return False
+    if context.qualified_name(path, annotation) == "datetime.datetime":
+        return True
+    return any(
+        _annotation_contains_datetime(child, path=path, context=context)
+        for child in ast.iter_child_nodes(annotation)
+        if isinstance(child, ast.expr)
+    )
+
+
 def pathlib_object_chains(
     function: ast.AsyncFunctionDef | ast.FunctionDef,
     *,
     class_node: ast.ClassDef | None,
     path: Path,
+    class_path: Path | None = None,
     context: ArchitectureContext,
 ) -> set[tuple[str, ...]]:
     names: set[tuple[str, ...]] = {
@@ -237,7 +350,11 @@ def pathlib_object_chains(
         if _annotation_contains_path(argument.annotation, path=path, context=context)
     }
     if class_node is not None:
-        for node_path, hierarchy_node in class_hierarchy(class_node, path=path, context=context):
+        for node_path, hierarchy_node in class_hierarchy(
+            class_node,
+            path=class_path or path,
+            context=context,
+        ):
             names.update(
                 ("self", child.target.id)
                 for child in hierarchy_node.body
@@ -295,13 +412,19 @@ def _annotation_contains_path(
     )
 
 
-def class_injected_field_names(class_node: ast.ClassDef, aliases: dict[str, str]) -> set[str]:
+def class_injected_field_names(
+    class_node: ast.ClassDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> set[str]:
     return {
         child.target.id
         for child in class_node.body
         if isinstance(child, ast.AnnAssign)
         and isinstance(child.target, ast.Name)
-        and injected_type_name(child.annotation, aliases)
+        and isinstance(child.annotation, ast.Subscript)
+        and context.qualified_name(path, child.annotation.value) == "diwire.Injected"
     }
 
 
@@ -316,9 +439,10 @@ def class_injected_callable_field_names(
         if not isinstance(child, ast.AnnAssign) or not isinstance(child.target, ast.Name):
             continue
         annotation = child.annotation
-        if not isinstance(annotation, ast.Subscript) or not context.qualified_name(
-            path, annotation.value
-        ).endswith("diwire.Injected"):
+        if (
+            not isinstance(annotation, ast.Subscript)
+            or context.qualified_name(path, annotation.value) != "diwire.Injected"
+        ):
             continue
         if _annotation_is_callable(annotation.slice, path=path, context=context, visited=set()):
             fields.add(child.target.id)
@@ -365,7 +489,7 @@ def _annotation_is_callable(
                 )
             )
             alias_qualified = f"{module}.{alias_name}"
-            if alias_qualified == qualified:
+            if alias_qualified == qualified or (alias_path == path and alias_name == qualified):
                 return _annotation_is_callable(
                     value,
                     path=alias_path,
@@ -382,12 +506,17 @@ def call_is_injected_collaborator_or_uow(
     class_node: ast.ClassDef,
     path: Path,
     context: ArchitectureContext,
+    class_path: Path | None = None,
 ) -> bool:
-    hierarchy = class_hierarchy(class_node, path=path, context=context)
+    hierarchy = class_hierarchy(class_node, path=class_path or path, context=context)
     injected_fields = {
         field
         for node_path, node in hierarchy
-        for field in class_injected_field_names(node, context.aliases(node_path))
+        for field in class_injected_field_names(
+            node,
+            path=node_path,
+            context=context,
+        )
     }
     callable_fields = {
         field
@@ -398,13 +527,11 @@ def call_is_injected_collaborator_or_uow(
             context=context,
         )
     }
-    direct_root = self_attribute_root_name(call.func)
     resolved_chains = [tuple(name.split(".")) for name in context.qualified_names(path, call.func)]
-    resolved_injected_roots = {
-        chain[1] for chain in resolved_chains if len(chain) >= 2 and chain[0] == "self"
-    }
-    if direct_root in injected_fields - callable_fields or (
-        resolved_injected_roots and resolved_injected_roots <= injected_fields - callable_fields
+    allowed_fields = injected_fields - callable_fields
+    if resolved_chains and all(
+        len(chain) >= 2 and chain[0] == "self" and chain[1] in allowed_fields
+        for chain in resolved_chains
     ):
         return True
     manager_fields = {
@@ -415,13 +542,9 @@ def call_is_injected_collaborator_or_uow(
         )
     }
     active_uows = active_uow_names_from_manager_fields(function, manager_fields)
-    chain = attribute_chain(call.func)
     return bool(
-        (chain and chain[0] in active_uows)
-        or (
-            resolved_chains
-            and all(resolved_chain[0] in active_uows for resolved_chain in resolved_chains)
-        )
+        resolved_chains
+        and all(resolved_chain[0] in active_uows for resolved_chain in resolved_chains)
     )
 
 

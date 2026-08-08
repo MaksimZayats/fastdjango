@@ -261,7 +261,7 @@ def is_injected_logger_annotation(
         return False
     if not isinstance(annotation, ast.Subscript):
         return False
-    if not annotation_name(annotation.value, aliases).endswith("Injected"):
+    if annotation_name(annotation.value, aliases) != "Injected":
         return False
 
     return is_logging_logger_expression(annotation.slice, aliases, imports)
@@ -275,7 +275,7 @@ def _is_injected_container_annotation(
         return False
     if not isinstance(annotation, ast.Subscript):
         return False
-    if not annotation_name(annotation.value, aliases).endswith("Injected"):
+    if annotation_name(annotation.value, aliases) != "Injected":
         return False
 
     return _is_diwire_container_expression(annotation.slice, aliases)

@@ -38,5 +38,6 @@ class TokenService(BaseEffectService):
 Checks methods inherited through project bases and mixins. It recognizes documented standard-library
 and client effect APIs through conservative branch-aware aliases, including environment, process,
 locale, timezone, network, and filesystem calls, ambient values such as `sys.argv`, and typed or
-derived `pathlib.Path` values. Project-specific wrappers and fully dynamic dispatch still require
-review.
+derived `pathlib.Path` values. Local-time conversions such as no-timezone `fromtimestamp()` and
+`astimezone()` on typed datetime values are ambient; conversions with an explicit timezone remain
+deterministic. Project-specific wrappers and fully dynamic dispatch still require review.

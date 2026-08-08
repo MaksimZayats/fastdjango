@@ -32,9 +32,10 @@ def test_total(container: Container) -> None:
 
 ### Detection notes
 
-Checks each required mirrored unit module for a `test_` function using the native `container`
-fixture returned directly from project `get_container()` in `tests/unit/conftest.py`, with no nearer
-fixture override or parameter reassignment. Every exact path-qualified concrete target needs a call
-in the executable test body; dead branches, nested scopes, parametrized/defaulted shadows, and
-un-awaited `aresolve` calls do not count. Classes that retain inherited abstract methods are not
-resolution targets.
+Checks each required mirrored unit module for a `test_` function using the exact native `container`
+fixture from `tests/unit/conftest.py`. Every reachable return or yield from that fixture must call the
+project `get_container()` directly. Local or nearer fixtures, including
+`@pytest.fixture(name="container")`, and parameter reassignment invalidate the proof. Every exact
+path-qualified concrete target needs a call in the executable test body; dead branches, nested scopes,
+parametrized/defaulted shadows, and un-awaited `aresolve` calls do not count. Classes that retain
+inherited abstract methods are not resolution targets.

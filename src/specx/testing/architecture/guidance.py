@@ -63,15 +63,15 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "core.behavior-no-ambient-runtime-access": _guidance(
         "Inject a capability or gateway for time, randomness, IDs, environment, filesystem, process, or network access.",
-        "Checks inherited project methods and recognizes documented standard-library/client effects, ambient values, reachable aliases, and typed pathlib values.",
+        "Checks inherited project methods and recognizes documented standard-library/client effects, ambient values, local-time conversions, reachable aliases, and typed pathlib or datetime values.",
     ),
     "core.contracts-use-immutable-dataclasses": _guidance(
         "Decorate the contract with @dataclass(frozen=True, kw_only=True, slots=True).",
-        "Follows path-qualified project inheritance from command, query, DTO, and entity bases and checks literal decorator flags.",
+        "Follows path-qualified project inheritance and requires every reachable definition-time decorator binding to be the standard-library dataclass with literal flags.",
     ),
     "core.no-runtime-configuration-or-pydantic": _guidance(
         "Move runtime settings and Pydantic models to an edge and pass typed values or collaborators into core.",
-        "Scans every core module for runtime references to exact Pydantic/settings ancestry, including project wrappers, plus direct environment access.",
+        "Scans every core module for runtime references to exact BaseModel, RootModel, Pydantic dataclass, and settings ancestry, including project wrappers, plus direct environment access.",
     ),
     "use-cases.commands-and-queries-live-local": _guidance(
         "Move the command or query class into the use-case module that consumes it.",
@@ -147,7 +147,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "diwire.no-function-injection": _guidance(
         "Use Injected fields on classes; tests should accept ordinary fixtures and resolve the target from container.",
-        "Resolves definition-time DIWire decorator aliases, Injected aliases, and Annotated injection markers on functions and methods.",
+        "Resolves definition-time DIWire decorator aliases, imported project Injected aliases, and exact Annotated injection markers on functions and methods.",
     ),
     "logging.no-injected-loggers": _guidance(
         "Create a private class logger from the full module and class name instead of injecting or registering Logger.",
@@ -167,7 +167,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "sqlalchemy.models-require-alembic": _guidance(
         "Add meaningful Alembic config, env and revision files, migration commands, and an upgrade-and-drift integration test.",
-        "Validates Alembic-qualified executable calls, invoked migration entrypoints, operational revisions, same-test upgrade/drift evidence, and parsed Make recipes.",
+        "Validates unshadowed Alembic-qualified executable calls, invoked migration entrypoints, upgrade operations, same-test upgrade/drift evidence, and parsed Make recipes with common runners.",
     ),
     "delivery.foundation-classes-live-under-delivery": _guidance(
         "Move every controller, delivery service, schema, or lifecycle under top-level delivery/.",
@@ -187,7 +187,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "tests.core-behavior-resolves-from-container": _guidance(
         "Use the native tests/unit/conftest.py container fixture and resolve every exact concrete behavior class in the mirrored test body.",
-        "Requires a directly returned native container, rejects nearer fixtures/reassignment/dead code, requires awaited aresolve, skips inherited abstract classes, and matches exact targets.",
+        "Requires every reachable native fixture outcome to call project get_container, rejects fixture aliases/nearer fixtures/reassignment/dead code, requires awaited aresolve, and matches exact concrete targets.",
     ),
     "tests.fixtures-do-not-bundle-mocks": _guidance(
         "Keep one-off mocks in the test and replace grouped mock fixtures with focused fixtures or mirrored fakes.",

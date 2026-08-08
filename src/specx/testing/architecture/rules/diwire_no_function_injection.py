@@ -47,12 +47,18 @@ class DIWireNoFunctionInjectionRule(ArchitectureRuleBase):
                         )
                     )
             for function in functions:
+                variadic_arguments = tuple(
+                    argument
+                    for argument in (function.args.vararg, function.args.kwarg)
+                    if argument is not None
+                )
                 injected = [
                     argument.arg
                     for argument in (
                         *function.args.posonlyargs,
                         *function.args.args,
                         *function.args.kwonlyargs,
+                        *variadic_arguments,
                     )
                     if _is_injected_annotation(
                         argument.annotation,
@@ -89,7 +95,7 @@ def _is_inject_expression(
     context: ArchitectureContext,
 ) -> bool:
     target = expression.func if isinstance(expression, ast.Call) else expression
-    return context.qualified_name(path, target) == "diwire.resolver_context.inject"
+    return "diwire.resolver_context.inject" in context.qualified_names(path, target)
 
 
 def _is_injected_annotation(
@@ -98,10 +104,36 @@ def _is_injected_annotation(
     path: Path,
     context: ArchitectureContext,
 ) -> bool:
+    return _annotation_is_injected(
+        annotation,
+        path=path,
+        context=context,
+        visited=frozenset(),
+    )
+
+
+def _annotation_is_injected(
+    annotation: ast.expr | None,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    visited: frozenset[str],
+) -> bool:
     if annotation is None:
         return False
-    if context.qualified_name(path, annotation) == "diwire.Injected":
+    qualified = context.qualified_name(path, annotation)
+    if qualified == "diwire.Injected":
         return True
+    if qualified not in visited:
+        alias = _project_alias_expression(qualified, context=context)
+        if alias is not None:
+            alias_path, expression = alias
+            return _annotation_is_injected(
+                expression,
+                path=alias_path,
+                context=context,
+                visited=visited | {qualified},
+            )
     if not isinstance(annotation, ast.Subscript):
         return False
     if context.qualified_name(path, annotation.value) == "diwire.Injected":
@@ -112,4 +144,49 @@ def _is_injected_annotation(
     }:
         return False
     elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else ()
-    return any("Injected" in context.qualified_name(path, element) for element in elements[1:])
+    return any(
+        context.qualified_name(
+            path,
+            element.func if isinstance(element, ast.Call) else element,
+        )
+        == "diwire._internal.markers.InjectedMarker"
+        for element in elements[1:]
+    )
+
+
+def _project_alias_expression(
+    qualified_name: str,
+    *,
+    context: ArchitectureContext,
+) -> tuple[Path, ast.expr] | None:
+    for alias_path in context.source_paths():
+        module = ".".join(
+            (
+                context.config.package_name,
+                *alias_path.relative_to(context.src_root).with_suffix("").parts,
+            )
+        )
+        for statement in context.tree(alias_path).body:
+            alias_name: str | None = None
+            value: ast.expr | None = None
+            type_alias_name = getattr(statement, "name", None)
+            type_alias_value = getattr(statement, "value", None)
+            if (
+                type(statement).__name__ == "TypeAlias"
+                and isinstance(type_alias_name, ast.Name)
+                and isinstance(type_alias_value, ast.expr)
+            ):
+                alias_name, value = type_alias_name.id, type_alias_value
+            elif (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+            ):
+                alias_name, value = statement.targets[0].id, statement.value
+            if (
+                alias_name is not None
+                and value is not None
+                and qualified_name in {alias_name, f"{module}.{alias_name}"}
+            ):
+                return alias_path, value
+    return None

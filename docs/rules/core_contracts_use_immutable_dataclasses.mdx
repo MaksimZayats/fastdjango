@@ -35,3 +35,5 @@ class OrderDTO(BaseDTO):
 ### Detection notes
 
 Checks direct or inherited project subclasses and requires all three literal `True` decorator flags.
+Decorator aliases are resolved at definition time; every reachable alias binding must identify the
+standard-library dataclass decorator.
