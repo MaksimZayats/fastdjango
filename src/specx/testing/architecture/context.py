@@ -1207,16 +1207,27 @@ def qualified_symbol_binding_choices(
     choices = {name: frozenset({value}) for name, value in deterministic.items()}
     if at_node is None:
         return choices
-    if _is_definition_time_expression(context.tree(path), at_node):
+    tree = context.tree(path)
+    definition_time = _is_definition_time_expression(tree, at_node)
+    class_scope = _class_body_scope_for_expression(tree, at_node)
+    class_body_time = class_scope is not None
+    if definition_time or class_body_time:
         module_name = (
             _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
         )
         choices, _found = _flow_bindings_to_target(
-            context.tree(path).body,
+            tree.body,
             {},
             target=at_node,
             module_name=module_name,
         )
+        if class_scope is not None:
+            choices, _found = _flow_bindings_to_target(
+                class_scope.body,
+                choices,
+                target=at_node,
+                module_name=module_name,
+            )
         choices = {
             name: frozenset(
                 _module_qualified_choice(value, module_name=module_name) for value in values
@@ -1257,6 +1268,81 @@ def qualified_symbol_binding_choices(
                 for name in _stored_names(generator.target):
                     choices[name] = frozenset({f"<local>.{name}"})
     return choices
+
+
+def _class_body_scope_for_expression(
+    tree: ast.Module,
+    target: ast.AST,
+) -> ast.ClassDef | None:
+    containing: list[ast.ClassDef] = []
+
+    def visit(node: ast.AST) -> bool:
+        if node is target:
+            return True
+        for child in ast.iter_child_nodes(node):
+            if visit(child):
+                if isinstance(node, ast.ClassDef):
+                    containing.append(node)
+                return True
+        return False
+
+    visit(tree)
+    return next(
+        (
+            class_scope
+            for class_scope in containing
+            if _is_class_body_time_expression(class_scope, target)
+        ),
+        None,
+    )
+
+
+def _is_class_body_time_expression(
+    class_scope: ast.ClassDef,
+    target: ast.AST,
+) -> bool:
+    def evaluated_in_class_body(node: ast.AST) -> bool:
+        if node is target:
+            return True
+        expressions: tuple[ast.AST, ...]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            expressions = (
+                *node.decorator_list,
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+                *(argument.annotation for argument in node.args.posonlyargs if argument.annotation),
+                *(argument.annotation for argument in node.args.args if argument.annotation),
+                *(argument.annotation for argument in node.args.kwonlyargs if argument.annotation),
+                *(
+                    (node.args.vararg.annotation,)
+                    if node.args.vararg and node.args.vararg.annotation
+                    else ()
+                ),
+                *(
+                    (node.args.kwarg.annotation,)
+                    if node.args.kwarg and node.args.kwarg.annotation
+                    else ()
+                ),
+                *((node.returns,) if node.returns is not None else ()),
+            )
+        elif isinstance(node, ast.Lambda):
+            expressions = (
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+            )
+        elif isinstance(node, ast.ClassDef):
+            expressions = (
+                *node.decorator_list,
+                *node.bases,
+                *(item.value for item in node.keywords),
+            )
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            expressions = (node.generators[0].iter,) if node.generators else ()
+        else:
+            expressions = tuple(ast.iter_child_nodes(node))
+        return any(evaluated_in_class_body(expression) for expression in expressions)
+
+    return any(evaluated_in_class_body(statement) for statement in class_scope.body)
 
 
 LexicalScope = (

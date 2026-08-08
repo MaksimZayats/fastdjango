@@ -47,7 +47,8 @@ group are checked. Fresh properties shadow inherited descriptors; qualified inhe
 overrides replace one component and retain the others from the explicitly selected property owner,
 including a non-first C3 mixin. Property abstractness follows every effective accessor component.
 Exact `property(...)` assignments also check positional or keyword project-function accessors and inline
-lambda bodies as fresh descriptors. Plain subclass
+lambda bodies as fresh descriptors. Class-body aliases of the three built-in wrappers are resolved in
+source order, while custom shadows and control-flow-ambiguous bindings are rejected. Plain subclass
 assignments that replace inherited injected fields remove collaborator trust. Calls in dormant nested
 function, class, and lambda bodies are not
 attributed to the enclosing use case; their definition-time expressions are. An injected plain

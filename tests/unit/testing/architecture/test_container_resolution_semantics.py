@@ -308,6 +308,8 @@ def test_reachable_module_pytest_outcome_disables_container_evidence(
         "True or pytest.xfail('disabled')\n",
         "False and pytest.importorskip('optional_dependency')\n",
         "pytest.skip('disabled', allow_module_level=True) if False else None\n",
+        "def helper(optional=False and pytest.importorskip('optional_dependency')):\n    pass\n",
+        "def helper(optional=pytest.xfail('disabled') if False else None):\n    pass\n",
     ],
 )
 def test_dead_module_pytest_outcome_preserves_container_evidence(
@@ -387,6 +389,38 @@ def test_conditionally_reachable_module_pytest_outcome_disables_container_eviden
         "if optional_dependency_enabled:\n"
         "    pytest.importorskip('optional_dependency')\n"
         f"{_test_source()}",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    "conditional_outcome",
+    [
+        "optional_dependency_enabled and pytest.importorskip('optional_dependency')\n",
+        "pytest.skip('disabled', allow_module_level=True) "
+        "if optional_dependency_enabled else None\n",
+        "def helper(optional=optional_dependency_enabled and "
+        "pytest.importorskip('optional_dependency')):\n"
+        "    pass\n",
+        "def helper(optional=pytest.xfail('disabled') "
+        "if optional_dependency_enabled else None):\n"
+        "    pass\n",
+        "class ImportTimePolicy:\n    optional_dependency_enabled and pytest.xfail('disabled')\n",
+    ],
+)
+def test_conditionally_reachable_expression_outcome_disables_container_evidence(
+    tmp_path: Path,
+    conditional_outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\n{conditional_outcome}\n{_test_source()}",
     )
 
     assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]

@@ -613,80 +613,93 @@ def _statement_exit_kinds(
     terminal_call_ids: frozenset[int] = frozenset(),
 ) -> set[str]:
     if isinstance(statement, ast.Return):
-        return {"return"}
+        outcomes = _expression_exit_kinds(
+            statement.value,
+            terminal_call_ids=terminal_call_ids,
+        )
+        return (outcomes - {"fall"}) | ({"return"} if "fall" in outcomes else set())
     if isinstance(statement, ast.Raise):
-        return {"raise"}
+        outcomes = _expression_exit_kinds(
+            statement.exc,
+            terminal_call_ids=terminal_call_ids,
+        )
+        return (outcomes - {"fall"}) | ({"raise"} if "fall" in outcomes else set())
     if isinstance(statement, ast.Break):
         return {"break"}
     if isinstance(statement, ast.Continue):
         return {"continue"}
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        if any(
-            _expression_guarantees_terminal_call(
-                expression,
-                terminal_call_ids=terminal_call_ids,
-            )
-            for expression in _function_definition_expressions(statement)
-        ):
-            return {"pytest-outcome"}
-        return {"fall"}
+        return _expression_sequence_exit_kinds(
+            _function_definition_expressions(statement),
+            terminal_call_ids=terminal_call_ids,
+        )
     if isinstance(statement, ast.ClassDef):
         definition_expressions = (
             *statement.decorator_list,
             *statement.bases,
             *(keyword.value for keyword in statement.keywords),
         )
-        if any(
-            _expression_guarantees_terminal_call(
-                expression,
-                terminal_call_ids=terminal_call_ids,
-            )
-            for expression in definition_expressions
-        ):
-            return {"pytest-outcome"}
-        return _block_exit_kinds(
-            statement.body,
+        definition_outcomes = _expression_sequence_exit_kinds(
+            definition_expressions,
             terminal_call_ids=terminal_call_ids,
         )
+        outcomes = definition_outcomes - {"fall"}
+        if "fall" in definition_outcomes:
+            outcomes.update(
+                _block_exit_kinds(
+                    statement.body,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
+        return outcomes
     if isinstance(statement, ast.If):
-        if _expression_guarantees_terminal_call(
+        test_outcomes = _expression_exit_kinds(
             statement.test,
-            terminal_call_ids=terminal_call_ids,
-        ):
-            return {"pytest-outcome"}
-        if _is_statically_false(statement.test):
-            return _block_exit_kinds(
-                statement.orelse,
-                terminal_call_ids=terminal_call_ids,
-            )
-        if _is_statically_true(statement.test):
-            return _block_exit_kinds(
-                statement.body,
-                terminal_call_ids=terminal_call_ids,
-            )
-        return _block_exit_kinds(
-            statement.body,
-            terminal_call_ids=terminal_call_ids,
-        ) | _block_exit_kinds(
-            statement.orelse,
             terminal_call_ids=terminal_call_ids,
         )
+        outcomes = test_outcomes - {"fall"}
+        if "fall" not in test_outcomes:
+            return outcomes
+        if _is_statically_false(statement.test):
+            outcomes.update(
+                _block_exit_kinds(
+                    statement.orelse,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
+            return outcomes
+        if _is_statically_true(statement.test):
+            outcomes.update(
+                _block_exit_kinds(
+                    statement.body,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
+            return outcomes
+        outcomes.update(_block_exit_kinds(statement.body, terminal_call_ids=terminal_call_ids))
+        outcomes.update(_block_exit_kinds(statement.orelse, terminal_call_ids=terminal_call_ids))
+        return outcomes
     if isinstance(statement, ast.While):
-        if _expression_guarantees_terminal_call(
+        test_outcomes = _expression_exit_kinds(
             statement.test,
             terminal_call_ids=terminal_call_ids,
-        ):
-            return {"pytest-outcome"}
+        )
+        outcomes = test_outcomes - {"fall"}
+        if "fall" not in test_outcomes:
+            return outcomes
         if _is_statically_false(statement.test):
-            return _block_exit_kinds(
-                statement.orelse,
-                terminal_call_ids=terminal_call_ids,
+            outcomes.update(
+                _block_exit_kinds(
+                    statement.orelse,
+                    terminal_call_ids=terminal_call_ids,
+                )
             )
+            return outcomes
         body_outcomes = _block_exit_kinds(
             statement.body,
             terminal_call_ids=terminal_call_ids,
         )
-        outcomes = body_outcomes - {"break", "continue", "fall"}
+        outcomes.update(body_outcomes - {"break", "continue", "fall"})
         if "break" in body_outcomes:
             outcomes.add("fall")
         if not _is_statically_true(statement.test):
@@ -698,16 +711,18 @@ def _statement_exit_kinds(
             )
         return outcomes
     if isinstance(statement, (ast.For, ast.AsyncFor)):
-        if _expression_guarantees_terminal_call(
+        iter_outcomes = _expression_exit_kinds(
             statement.iter,
             terminal_call_ids=terminal_call_ids,
-        ):
-            return {"pytest-outcome"}
+        )
+        outcomes = iter_outcomes - {"fall"}
+        if "fall" not in iter_outcomes:
+            return outcomes
         body_outcomes = _block_exit_kinds(
             statement.body,
             terminal_call_ids=terminal_call_ids,
         )
-        outcomes = body_outcomes - {"break", "continue", "fall"}
+        outcomes.update(body_outcomes - {"break", "continue", "fall"})
         if "break" in body_outcomes:
             outcomes.add("fall")
         outcomes.update(
@@ -718,18 +733,18 @@ def _statement_exit_kinds(
         )
         return outcomes
     if isinstance(statement, (ast.With, ast.AsyncWith)):
-        if any(
-            _expression_guarantees_terminal_call(
-                item.context_expr,
-                terminal_call_ids=terminal_call_ids,
-            )
-            for item in statement.items
-        ):
-            return {"pytest-outcome"}
-        outcomes = _block_exit_kinds(
-            statement.body,
+        context_outcomes = _expression_sequence_exit_kinds(
+            tuple(item.context_expr for item in statement.items),
             terminal_call_ids=terminal_call_ids,
         )
+        outcomes = context_outcomes - {"fall"}
+        if "fall" in context_outcomes:
+            outcomes.update(
+                _block_exit_kinds(
+                    statement.body,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
         if any(
             isinstance(node, ast.Call)
             for item in statement.items
@@ -778,29 +793,31 @@ def _statement_exit_kinds(
             outcomes.update(before_finally)
         return outcomes
     if isinstance(statement, ast.Match):
-        if _expression_guarantees_terminal_call(
+        subject_outcomes = _expression_exit_kinds(
             statement.subject,
             terminal_call_ids=terminal_call_ids,
-        ):
-            return {"pytest-outcome"}
+        )
+        outcomes = subject_outcomes - {"fall"}
+        if "fall" not in subject_outcomes:
+            return outcomes
         exhaustive = any(
             case.guard is None and _pattern_is_irrefutable(case.pattern) for case in statement.cases
         )
-        outcomes = {
+        outcomes.update(
             outcome
             for case in statement.cases
             for outcome in _block_exit_kinds(
                 case.body,
                 terminal_call_ids=terminal_call_ids,
             )
-        }
+        )
         if not exhaustive:
             outcomes.add("fall")
         return outcomes
-    if _expression_guarantees_terminal_call(statement, terminal_call_ids=terminal_call_ids):
-        return {"pytest-outcome"}
-    outcomes = {"fall"}
-    if any(isinstance(node, ast.Call) for node in _statement_scope_nodes(statement)):
+    outcomes = _expression_exit_kinds(statement, terminal_call_ids=terminal_call_ids)
+    if "fall" in outcomes and any(
+        isinstance(node, ast.Call) for node in _statement_scope_nodes(statement)
+    ):
         outcomes.add("raise")
     return outcomes
 
@@ -827,50 +844,115 @@ def _expression_guarantees_terminal_call(
     *,
     terminal_call_ids: frozenset[int],
 ) -> bool:
+    return _expression_exit_kinds(
+        node,
+        terminal_call_ids=terminal_call_ids,
+    ) == {"pytest-outcome"}
+
+
+def _expression_exit_kinds(
+    node: ast.AST | None,
+    *,
+    terminal_call_ids: frozenset[int],
+) -> set[str]:
+    if node is None:
+        return {"fall"}
     if isinstance(node, ast.Call) and id(node) in terminal_call_ids:
-        return True
+        return {"pytest-outcome"}
     if isinstance(node, ast.BoolOp):
+        outcomes: set[str] = set()
+        active = True
         for value in node.values:
-            if _expression_guarantees_terminal_call(
+            if not active:
+                break
+            value_outcomes = _expression_exit_kinds(
                 value,
                 terminal_call_ids=terminal_call_ids,
-            ):
-                return True
-            if isinstance(node.op, ast.Or) and not _is_statically_false(value):
-                return False
-            if isinstance(node.op, ast.And) and not _is_statically_true(value):
-                return False
-        return False
+            )
+            outcomes.update(value_outcomes - {"fall"})
+            if "fall" not in value_outcomes:
+                active = False
+                break
+            if isinstance(node.op, ast.Or):
+                if _is_statically_true(value):
+                    outcomes.add("fall")
+                    active = False
+                elif not _is_statically_false(value):
+                    outcomes.add("fall")
+            elif _is_statically_false(value):
+                outcomes.add("fall")
+                active = False
+            elif not _is_statically_true(value):
+                outcomes.add("fall")
+        if active:
+            outcomes.add("fall")
+        return outcomes
     if isinstance(node, ast.IfExp):
-        if _expression_guarantees_terminal_call(
+        test_outcomes = _expression_exit_kinds(
             node.test,
             terminal_call_ids=terminal_call_ids,
-        ):
-            return True
-        if _is_statically_false(node.test):
-            return _expression_guarantees_terminal_call(
-                node.orelse,
-                terminal_call_ids=terminal_call_ids,
-            )
-        if _is_statically_true(node.test):
-            return _expression_guarantees_terminal_call(
-                node.body,
-                terminal_call_ids=terminal_call_ids,
-            )
-        return all(
-            _expression_guarantees_terminal_call(
-                branch,
-                terminal_call_ids=terminal_call_ids,
-            )
-            for branch in (node.body, node.orelse)
         )
-    return any(
-        _expression_guarantees_terminal_call(
-            child,
+        outcomes = test_outcomes - {"fall"}
+        if "fall" not in test_outcomes:
+            return outcomes
+        if _is_statically_false(node.test):
+            outcomes.update(
+                _expression_exit_kinds(
+                    node.orelse,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
+            return outcomes
+        if _is_statically_true(node.test):
+            outcomes.update(
+                _expression_exit_kinds(
+                    node.body,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
+            return outcomes
+        for branch in (node.body, node.orelse):
+            outcomes.update(
+                _expression_exit_kinds(
+                    branch,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
+        return outcomes
+    if isinstance(node, ast.Lambda):
+        return _expression_sequence_exit_kinds(
+            _lambda_definition_expressions(node),
             terminal_call_ids=terminal_call_ids,
         )
-        for child in ast.iter_child_nodes(node)
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        outer_iterable = node.generators[0].iter if node.generators else None
+        return _expression_exit_kinds(
+            outer_iterable,
+            terminal_call_ids=terminal_call_ids,
+        )
+    return _expression_sequence_exit_kinds(
+        tuple(ast.iter_child_nodes(node)),
+        terminal_call_ids=terminal_call_ids,
     )
+
+
+def _expression_sequence_exit_kinds(
+    expressions: tuple[ast.AST, ...],
+    *,
+    terminal_call_ids: frozenset[int],
+) -> set[str]:
+    outcomes = {"fall"}
+    for expression in expressions:
+        if "fall" not in outcomes:
+            break
+        outcomes.remove("fall")
+        outcomes.update(
+            _expression_exit_kinds(
+                expression,
+                terminal_call_ids=terminal_call_ids,
+            )
+        )
+    return outcomes
 
 
 def _block_exit_kinds(

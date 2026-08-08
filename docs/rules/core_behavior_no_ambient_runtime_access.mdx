@@ -53,7 +53,9 @@ components of properties. A fresh property shadows the inherited descriptor, whi
 components from the explicitly selected owner, including a non-first C3 mixin. A property remains
 abstract when any effective accessor is abstract; concrete component overrides update that status.
 Exact `property(...)` assignments map positional or `fget`/`fset`/`fdel` project functions and inline
-lambdas to the same accessor model and create a fresh descriptor shadow.
+lambdas to the same accessor model and create a fresh descriptor shadow. Class-body aliases of
+`property`, `staticmethod`, and `classmethod` are followed in source order; a custom shadow or a
+control-flow-ambiguous wrapper is not treated as the corresponding built-in.
 Inherited behavior has one diagnostic owner. Statically called nested
 and module-local helper bodies are followed. Dormant nested function, class, and lambda bodies are not
 attributed to the enclosing behavior; their definition-time expressions are. Project-specific wrappers
