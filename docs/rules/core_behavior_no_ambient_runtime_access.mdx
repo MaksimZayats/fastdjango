@@ -49,7 +49,9 @@ reaching-flow analysis: a definite reassignment removes the default's provenance
 reassignment remains conservative. Effective methods follow Python C3 inheritance, including
 class-control-flow, exact descriptor-attached methods, and the effective getter, setter, and deleter
 components of properties. A fresh property shadows the inherited descriptor, while a qualified
-`@Base.property.getter`, `setter`, or `deleter` override replaces only that component under C3.
+`@Base.property.getter`, `setter`, or `deleter` override replaces only that component and preserves
+components from the explicitly selected owner, including a non-first C3 mixin. A property remains
+abstract when any effective accessor is abstract; concrete component overrides update that status.
 Inherited behavior has one diagnostic owner. Statically called nested
 and module-local helper bodies are followed. Dormant nested function, class, and lambda bodies are not
 attributed to the enclosing behavior; their definition-time expressions are. Project-specific wrappers

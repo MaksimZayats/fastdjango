@@ -233,15 +233,74 @@ def _module_import_can_complete(
     context: ArchitectureContext,
 ) -> bool:
     terminal_call_ids = frozenset(
-        id(node)
-        for node in _module_import_nodes(tree)
-        if isinstance(node, ast.Call)
-        and context.qualified_name(path, node.func) in _PYTEST_MODULE_OUTCOME_CALLS
+        {
+            id(node)
+            for node in _module_import_nodes(tree)
+            if isinstance(node, ast.Call)
+            and context.qualified_name(path, node.func) in _PYTEST_MODULE_OUTCOME_CALLS
+        }
+        | _module_assignment_alias_outcome_call_ids(
+            tree,
+            path=path,
+            context=context,
+        )
     )
     return "pytest-outcome" not in _block_exit_kinds(
         tree.body,
         terminal_call_ids=terminal_call_ids,
     )
+
+
+def _module_assignment_alias_outcome_call_ids(
+    tree: ast.Module,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> set[int]:
+    terminal_call_ids: set[int] = set()
+
+    def outcome_alias(expression: ast.expr | None, aliases: dict[str, str]) -> str | None:
+        if expression is None:
+            return None
+        qualified = context.qualified_name(path, expression)
+        if qualified in _PYTEST_MODULE_OUTCOME_CALLS:
+            return qualified
+        if isinstance(expression, ast.Name):
+            return aliases.get(expression.id)
+        return None
+
+    def visit_node(node: ast.AST, aliases: dict[str, str]) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.ClassDef):
+            visit_block(node.body, {})
+            return
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in aliases
+        ):
+            terminal_call_ids.add(id(node))
+        for child in ast.iter_child_nodes(node):
+            visit_node(child, aliases)
+
+    def visit_block(statements: list[ast.stmt], aliases: dict[str, str]) -> None:
+        for statement in statements:
+            visit_node(statement, aliases)
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                targets = (
+                    statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                )
+                alias = outcome_alias(statement.value, aliases)
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        if alias is None:
+                            aliases.pop(target.id, None)
+                        else:
+                            aliases[target.id] = alias
+
+    visit_block(tree.body, {})
+    return terminal_call_ids
 
 
 def _module_import_nodes(tree: ast.Module) -> tuple[ast.AST, ...]:
@@ -253,7 +312,6 @@ def _module_import_nodes(tree: ast.Module) -> tuple[ast.AST, ...]:
             (
                 ast.FunctionDef,
                 ast.AsyncFunctionDef,
-                ast.ClassDef,
                 ast.Lambda,
                 ast.ListComp,
                 ast.SetComp,
@@ -532,6 +590,24 @@ def _statement_exit_kinds(
         return {"break"}
     if isinstance(statement, ast.Continue):
         return {"continue"}
+    if isinstance(statement, ast.ClassDef):
+        definition_expressions = (
+            *statement.decorator_list,
+            *statement.bases,
+            *(keyword.value for keyword in statement.keywords),
+        )
+        if any(
+            _expression_guarantees_terminal_call(
+                expression,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for expression in definition_expressions
+        ):
+            return {"pytest-outcome"}
+        return _block_exit_kinds(
+            statement.body,
+            terminal_call_ids=terminal_call_ids,
+        )
     if isinstance(statement, ast.If):
         if _expression_guarantees_terminal_call(
             statement.test,

@@ -346,6 +346,60 @@ def test_conditionally_reachable_module_pytest_outcome_disables_container_eviden
     assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
 
 
+@pytest.mark.parametrize(
+    "class_body",
+    [
+        "    pytest.skip('disabled', allow_module_level=True)\n",
+        "    pytest.importorskip('optional_dependency')\n",
+        "    if optional_dependency_enabled:\n        pytest.xfail('disabled')\n",
+        "    stop_module = pytest.skip\n    stop_module('disabled', allow_module_level=True)\n",
+    ],
+)
+def test_reachable_class_body_pytest_outcome_disables_container_evidence(
+    tmp_path: Path,
+    class_body: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\nclass ImportTimePolicy:\n{class_body}\n{_test_source()}",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    "class_body",
+    [
+        "    if False:\n        pytest.skip('disabled', allow_module_level=True)\n",
+        "    True or pytest.xfail('disabled')\n",
+        "    False and pytest.importorskip('optional_dependency')\n",
+        "    def deferred():\n"
+        "        pytest.skip('disabled', allow_module_level=True)\n"
+        "    callback = lambda: pytest.xfail('disabled')\n",
+    ],
+)
+def test_dead_or_deferred_class_body_outcome_preserves_container_evidence(
+    tmp_path: Path,
+    class_body: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\nclass ImportTimePolicy:\n{class_body}\n{_test_source()}",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
 def test_keyword_skipif_disables_container_evidence(tmp_path: Path) -> None:
     _write_project(tmp_path)
     _write_root_fixture(

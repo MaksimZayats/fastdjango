@@ -63,9 +63,11 @@ and calls after exhaustive return/raise control flow are unreachable. Runtime `p
 `pytest.xfail()` calls terminate evidence, including aliases and reachable short-circuit expressions;
 ordinary `except Exception` handlers do not catch those outcomes, while bare handlers and explicit
 `BaseException` handlers do. Reachable module-import calls to those APIs or
-`pytest.importorskip()` invalidate the integration module, while statically dead or short-circuited
-calls do not. Boolean short-circuiting, conditional expressions, and potentially empty comprehensions
-must actually guarantee a call before it contributes evidence.
+`pytest.importorskip()` invalidate the integration module, including calls in class bodies, calls
+through assignment aliases, and invoked local helper chains. Statically dead or short-circuited calls
+do not, and deferred function and lambda bodies are not executed during import. Boolean
+short-circuiting, conditional expressions, and potentially empty comprehensions must actually
+guarantee a call before it contributes evidence.
 
 The rule also shell-tokenizes `migrate`, `makemigrations`, and `migration-check` recipes and requires
 them to invoke Alembic directly. Comments, `echo`, dead branches, swallowed failures, rebound Alembic

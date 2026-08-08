@@ -10,8 +10,10 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     active_uow_names_from_manager_fields,
     attribute_chain,
+    module_scope_class_nodes,
     project_class_hierarchy,
     project_class_qualified_names,
+    qualified_class_name,
 )
 
 AMBIENT_EXACT_CALLS = frozenset(
@@ -843,10 +845,12 @@ def _class_statement_method_groups(
 ) -> dict[str, ClassMethodGroup]:
     current = dict(state)
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        descriptor_component, descriptor_binding = _function_descriptor_component(
-            statement,
-            path=path,
-            context=context,
+        descriptor_component, descriptor_binding, descriptor_owners = (
+            _function_descriptor_component(
+                statement,
+                path=path,
+                context=context,
+            )
         )
         declaration = ClassMethodDeclaration(
             path=path,
@@ -857,10 +861,21 @@ def _class_statement_method_groups(
         existing = current.get(statement.name)
         existing_declarations = existing.declarations if existing is not None else ()
         if descriptor_component is not None:
+            selected_descriptor_found, selected_declarations = (
+                _selected_descriptor_declarations(
+                    descriptor_owners,
+                    method_name=statement.name,
+                    replaced_component=descriptor_component,
+                    current_class=None,
+                    context=context,
+                )
+                if descriptor_binding == "inherited"
+                else (False, ())
+            )
             descriptor_declarations = (
                 tuple(
                     candidate
-                    for candidate in existing_declarations
+                    for candidate in (*existing_declarations, *selected_declarations)
                     if candidate.descriptor_component is not None
                     and candidate.descriptor_component != descriptor_component
                 )
@@ -870,6 +885,7 @@ def _class_statement_method_groups(
             declarations = (*descriptor_declarations, declaration)
             shadows_inherited_name = bool(
                 descriptor_binding == "fresh"
+                or selected_descriptor_found
                 or (existing is not None and existing.shadows_inherited_name)
             )
             overridden_components: set[DescriptorComponent] = set(
@@ -1178,7 +1194,11 @@ def _function_descriptor_component(
     *,
     path: Path,
     context: ArchitectureContext,
-) -> tuple[DescriptorComponent | None, DescriptorBinding | None]:
+) -> tuple[
+    DescriptorComponent | None,
+    DescriptorBinding | None,
+    frozenset[str],
+]:
     for decorator in function.decorator_list:
         expression = decorator.func if isinstance(decorator, ast.Call) else decorator
         if context.qualified_names(path, expression) & {
@@ -1186,14 +1206,70 @@ def _function_descriptor_component(
             "builtins.property",
             "property",
         }:
-            return "getter", "fresh"
+            return "getter", "fresh", frozenset()
         chain = attribute_chain(expression)
         if len(chain) >= 2 and chain[-2] == function.name and chain[-1] in DESCRIPTOR_COMPONENTS:
+            descriptor_owners: frozenset[str] = (
+                context.qualified_names(path, expression.value.value)
+                if len(chain) >= 3
+                and isinstance(expression, ast.Attribute)
+                and isinstance(expression.value, ast.Attribute)
+                else frozenset()
+            )
             return (
                 chain[-1],
                 "local" if len(chain) == 2 else "inherited",
+                descriptor_owners,
             )
-    return None, None
+    return None, None, frozenset()
+
+
+def _selected_descriptor_declarations(
+    qualified_owners: frozenset[str],
+    *,
+    method_name: str,
+    replaced_component: DescriptorComponent,
+    current_class: ast.ClassDef | None,
+    context: ArchitectureContext,
+) -> tuple[bool, tuple[ClassMethodDeclaration, ...]]:
+    selected: list[ClassMethodDeclaration] = []
+    selected_descriptor_found = False
+    seen: set[tuple[Path, int, MethodBinding, DescriptorComponent | None]] = set()
+    for owner_path in context.source_paths():
+        for owner in module_scope_class_nodes(context.tree(owner_path)):
+            if (
+                owner is current_class
+                or qualified_class_name(
+                    owner,
+                    source_path=owner_path,
+                    context=context,
+                )
+                not in qualified_owners
+            ):
+                continue
+            for candidate_name, declaration in effective_class_method_declarations(
+                owner,
+                path=owner_path,
+                context=context,
+            ):
+                if candidate_name == method_name and declaration.descriptor_component is not None:
+                    selected_descriptor_found = True
+                if (
+                    candidate_name != method_name
+                    or declaration.descriptor_component is None
+                    or declaration.descriptor_component == replaced_component
+                ):
+                    continue
+                key = (
+                    declaration.path,
+                    id(declaration.function),
+                    declaration.binding,
+                    declaration.descriptor_component,
+                )
+                if key not in seen:
+                    seen.add(key)
+                    selected.append(declaration)
+    return selected_descriptor_found, tuple(selected)
 
 
 def _project_function_definitions(

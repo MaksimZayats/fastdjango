@@ -522,10 +522,26 @@ def _passing_evidence_paths(
     functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
     visited: frozenset[str] = frozenset(),
 ) -> tuple[frozenset[str], ...]:
+    paths = _function_evidence_paths(
+        function,
+        bindings=bindings,
+        functions=functions,
+        visited=visited,
+    )
+    return tuple(path.evidence for path in paths if path.termination in {"next", "return"})
+
+
+def _function_evidence_paths(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    visited: frozenset[str] = frozenset(),
+) -> tuple[_EvidencePath, ...]:
     function_key = function.name
     if function_key in visited:
-        return (frozenset(),)
-    paths = _flow_block(
+        return (_EvidencePath(frozenset()),)
+    return _flow_block(
         function.body,
         (_EvidencePath(frozenset()),),
         scope=function,
@@ -534,7 +550,6 @@ def _passing_evidence_paths(
         visited=visited | {function_key},
         batch_aliases=_batch_operation_aliases(function, bindings=bindings),
     )
-    return tuple(path.evidence for path in paths if path.termination in {"next", "return"})
 
 
 def _flow_block(
@@ -804,7 +819,32 @@ def _flow_statement(
             for case in statement.cases
         )
         return _deduplicate_paths((*case_paths, *(() if exhaustive else matched)))
-    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+    if isinstance(statement, ast.ClassDef):
+        entered = paths
+        for expression in (
+            *statement.decorator_list,
+            *statement.bases,
+            *(keyword.value for keyword in statement.keywords),
+        ):
+            entered = _add_expression_evidence(
+                entered,
+                expression,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
+        return _flow_block(
+            statement.body,
+            entered,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return paths
     return _add_expression_evidence(
         paths,
@@ -1088,7 +1128,7 @@ def _add_call_evidence(
     ):
         if helper_name in visited:
             continue
-        helper_paths = _passing_evidence_paths(
+        helper_paths = _function_evidence_paths(
             functions[helper_name],
             bindings=bindings,
             functions=functions,
@@ -1098,9 +1138,16 @@ def _add_call_evidence(
             return ()
         current = _deduplicate_paths(
             tuple(
-                _EvidencePath(path.evidence | helper_evidence, path.termination)
+                _EvidencePath(
+                    path.evidence | helper_path.evidence,
+                    (
+                        path.termination
+                        if helper_path.termination in {"next", "return"}
+                        else helper_path.termination
+                    ),
+                )
                 for path in current
-                for helper_evidence in helper_paths
+                for helper_path in helper_paths
             )
         )
     return current
@@ -1210,7 +1257,7 @@ def _referenced_local_functions(
     if (
         isinstance(call.func, ast.Name)
         and call.func.id in functions
-        and not _function_binds_name(function, call.func.id)
+        and (function.name == "<module>" or not _function_binds_name(function, call.func.id))
     ):
         references.add(call.func.id)
     if isinstance(call.func, ast.Attribute) and call.func.attr == "run_sync":
@@ -1607,12 +1654,35 @@ def _import_bindings(tree: ast.Module) -> dict[str, str]:
                 bindings[alias.asname or alias.name] = f"{node.module}.{alias.name}"
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value = node.value
             for target in targets:
                 if isinstance(target, ast.Name):
-                    bindings.pop(target.id, None)
+                    outcome_alias = _assignment_outcome_alias(value, bindings=bindings)
+                    if outcome_alias is None:
+                        bindings.pop(target.id, None)
+                    else:
+                        bindings[target.id] = outcome_alias
         elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             bindings.pop(node.name, None)
     return bindings
+
+
+def _assignment_outcome_alias(
+    expression: ast.expr | None,
+    *,
+    bindings: dict[str, str],
+) -> str | None:
+    if expression is None:
+        return None
+    parts: list[str] = []
+    current = expression
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    qualified = ".".join((bindings.get(current.id, current.id), *reversed(parts)))
+    return qualified if qualified in _PYTEST_OUTCOME_CALLS else None
 
 
 def _qualified_call_name(
@@ -1628,12 +1698,65 @@ def _qualified_call_name(
         expression = expression.value
     if not isinstance(expression, ast.Name):
         return ast.unparse(call.func)
+    module_wrapper_binding = (
+        _module_binding_before_call(expression.id, call=call, statements=scope.body)
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) and scope.name == "<module>"
+        else None
+    )
     root = (
-        expression.id
+        module_wrapper_binding
+        if module_wrapper_binding is not None
+        else expression.id
         if scope is not None and _name_is_shadowed(expression.id, call=call, scope=scope)
         else bindings.get(expression.id, expression.id)
     )
     return ".".join((root, *reversed(parts)))
+
+
+def _module_binding_before_call(
+    name: str,
+    *,
+    call: ast.Call,
+    statements: list[ast.stmt],
+    initial_bindings: dict[str, str] | None = None,
+) -> str | None:
+    bindings = dict(initial_bindings or {})
+    call_position = (call.lineno, call.col_offset)
+    for statement in statements:
+        if isinstance(statement, ast.ClassDef) and any(
+            node is call for node in ast.walk(statement)
+        ):
+            return _module_binding_before_call(
+                name,
+                call=call,
+                statements=statement.body,
+                initial_bindings=bindings,
+            )
+        if (statement.lineno, statement.col_offset) >= call_position:
+            break
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                bindings[alias.asname or alias.name.split(".")[0]] = (
+                    alias.name if alias.asname else alias.name.split(".")[0]
+                )
+            continue
+        if isinstance(statement, ast.ImportFrom) and statement.module:
+            for alias in statement.names:
+                bindings[alias.asname or alias.name] = f"{statement.module}.{alias.name}"
+            continue
+        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            outcome_alias = _assignment_outcome_alias(statement.value, bindings=bindings)
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    if outcome_alias is None:
+                        bindings.pop(target.id, None)
+                    else:
+                        bindings[target.id] = outcome_alias
+            continue
+        if isinstance(statement, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            bindings.pop(statement.name, None)
+    return bindings.get(name)
 
 
 def _name_is_shadowed(

@@ -263,6 +263,143 @@ def test_conditionally_reachable_module_pytest_outcome_disables_migration_eviden
     )
 
 
+@pytest.mark.parametrize(
+    "class_body",
+    [
+        "    pytest.skip('disabled', allow_module_level=True)\n",
+        "    pytest.importorskip('optional_dependency')\n",
+        "    if optional_dependency_enabled:\n        pytest.xfail('disabled')\n",
+        "    stop_module = pytest.skip\n    stop_module('disabled', allow_module_level=True)\n",
+    ],
+)
+def test_reachable_class_body_pytest_outcome_disables_migration_evidence(
+    tmp_path: Path,
+    class_body: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n"
+        f"class ImportTimePolicy:\n{class_body}\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _invalid_file(
+        _check(tmp_path),
+        "tests/integration/migrations/test_migrations.py",
+    )
+
+
+@pytest.mark.parametrize(
+    "class_body",
+    [
+        "    if False:\n        pytest.skip('disabled', allow_module_level=True)\n",
+        "    True or pytest.xfail('disabled')\n",
+        "    False and pytest.importorskip('optional_dependency')\n",
+        "    def deferred():\n"
+        "        pytest.skip('disabled', allow_module_level=True)\n"
+        "    callback = lambda: pytest.xfail('disabled')\n",
+    ],
+)
+def test_dead_or_deferred_class_body_outcome_preserves_migration_evidence(
+    tmp_path: Path,
+    class_body: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n"
+        f"class ImportTimePolicy:\n{class_body}\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+@pytest.mark.parametrize(
+    "module_outcome",
+    [
+        "stop_module = pytest.skip\nstop_module('disabled', allow_module_level=True)\n",
+        "stop_module = pytest.xfail\nstop_alias = stop_module\nstop_alias('disabled')\n",
+        "stop_module = pytest.skip\n"
+        "stop_module('disabled', allow_module_level=True)\n"
+        "stop_module = object\n",
+        "def stop_two():\n"
+        "    pytest.importorskip('optional_dependency')\n"
+        "def stop_one():\n"
+        "    stop_two()\n"
+        "stop_one()\n",
+        "def stop_one():\n"
+        "    stop_two()\n"
+        "def stop_two():\n"
+        "    stop_one()\n"
+        "    pytest.xfail('disabled')\n"
+        "stop_one()\n",
+    ],
+)
+def test_aliased_or_helper_module_outcome_disables_migration_evidence(
+    tmp_path: Path,
+    module_outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n"
+        f"{module_outcome}\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _invalid_file(
+        _check(tmp_path),
+        "tests/integration/migrations/test_migrations.py",
+    )
+
+
+def test_uninvoked_or_short_circuited_outcome_helper_preserves_migration_evidence(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "def stop_module():\n"
+        "    pytest.skip('disabled', allow_module_level=True)\n\n"
+        "False and stop_module()\n\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+def test_rebound_outcome_alias_preserves_migration_evidence(tmp_path: Path) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "stop_module = pytest.skip\n"
+        "stop_module = lambda *args, **kwargs: None\n"
+        "stop_module('disabled', allow_module_level=True)\n\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
 def test_exception_handler_does_not_catch_pytest_outcome_for_migration_evidence(
     tmp_path: Path,
 ) -> None:

@@ -41,9 +41,11 @@ parametrized/defaulted shadows, function/module/class-level skipped or unconditi
 runtime `pytest.skip()` or `pytest.xfail()` termination, short-circuited expressions, swallowed
 failures, suppressed exceptions, patched resolve methods, and un-awaited `aresolve` calls do not
 count. Reachable module-import calls to `pytest.skip()`, `pytest.xfail()`, or
-`pytest.importorskip()` invalidate the module's evidence; statically dead and short-circuited calls do
-not. An `except Exception` handler does not catch pytest outcome termination; a bare handler or one
-that explicitly catches `BaseException` does. Class-scoped container fixtures shadow only tests in
-their owning class hierarchy, while module fixtures shadow the whole module. Conditional xfail marks
+`pytest.importorskip()` invalidate the module's evidence, including calls executed in class bodies;
+statically dead and short-circuited calls do not, and deferred function and lambda bodies are not
+executed during import. An `except Exception` handler does not catch pytest outcome termination; a
+bare handler or one that explicitly catches `BaseException` does. Class-scoped container fixtures
+shadow only tests in their owning class hierarchy, while module fixtures shadow the whole module.
+Conditional xfail marks
 known statically false, reachable conditional expressions, and handlers that re-raise remain valid
 evidence. Classes that retain inherited abstract methods are not resolution targets.

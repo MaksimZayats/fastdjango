@@ -44,7 +44,8 @@ reassignment remove injected-field trust. Methods declared under module or class
 lexically nested foundation subclasses, exact `staticmethod`/`classmethod` attachments of project
 functions, property getter/setter/deleter components, and the runtime implementation behind an overload
 group are checked. Fresh properties shadow inherited descriptors; qualified inherited accessor
-overrides replace one component and retain the others under C3. Plain subclass
+overrides replace one component and retain the others from the explicitly selected property owner,
+including a non-first C3 mixin. Property abstractness follows every effective accessor component. Plain subclass
 assignments that replace inherited injected fields remove collaborator trust. Calls in dormant nested
 function, class, and lambda bodies are not
 attributed to the enclosing use case; their definition-time expressions are. An injected plain
