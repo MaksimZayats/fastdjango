@@ -120,6 +120,38 @@ def test_plain_container_helpers_do_not_shadow_pytest_fixture(
     assert _check(tmp_path).violations == ()
 
 
+@pytest.mark.parametrize(
+    "fixture_decorator",
+    [
+        "@pytest.fixture",
+        "@pytest.fixture(name='container')",
+    ],
+)
+def test_class_local_container_fixture_shadows_native_fixture(
+    tmp_path: Path,
+    fixture_decorator: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    fixture_name = "container" if "name=" not in fixture_decorator else "fake_container"
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "class TestGraph:\n"
+        f"    {fixture_decorator}\n"
+        f"    def {fixture_name}(self):\n"
+        "        return object()\n\n"
+        "    def test_graph(self, container):\n"
+        "        container.resolve(OrderService)\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
 def test_container_proof_rejects_method_mutation_and_swallowed_resolution(
     tmp_path: Path,
 ) -> None:
@@ -246,6 +278,119 @@ def test_statically_false_xfail_still_proves_container_resolution(tmp_path: Path
         "@pytest.mark.xfail(condition=False, reason='enabled')\n"
         "def test_graph(container):\n"
         "    container.resolve(OrderService)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+@pytest.mark.parametrize(
+    "terminal_call",
+    [
+        "pytest.skip('disabled')",
+        "pytest.xfail('disabled')",
+        "stop_test('disabled')",
+    ],
+)
+def test_runtime_pytest_termination_makes_later_resolution_dead(
+    tmp_path: Path,
+    terminal_call: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "from pytest import skip as stop_test\n"
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        f"    {terminal_call}\n"
+        "    container.resolve(OrderService)\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    pytest.skip('disabled') or container.resolve(OrderService)\n",
+        "    if pytest.xfail('disabled'):\n        container.resolve(OrderService)\n",
+    ],
+)
+def test_runtime_pytest_termination_short_circuits_its_expression(
+    tmp_path: Path,
+    body: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        f"{body}",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "True or container.resolve(OrderService)",
+        "False and container.resolve(OrderService)",
+        "container.resolve(OrderService) if False else None",
+        "None if True else container.resolve(OrderService)",
+    ],
+)
+def test_short_circuited_container_resolution_is_not_evidence(
+    tmp_path: Path,
+    expression: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        f"    {expression}\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "False or container.resolve(OrderService)",
+        "True and container.resolve(OrderService)",
+        "container.resolve(OrderService) if True else None",
+        "None if False else container.resolve(OrderService)",
+    ],
+)
+def test_reachable_short_circuit_container_resolution_is_evidence(
+    tmp_path: Path,
+    expression: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        f"    {expression}\n",
     )
 
     assert _check(tmp_path).violations == ()

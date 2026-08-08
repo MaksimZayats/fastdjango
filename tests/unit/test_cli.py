@@ -548,6 +548,34 @@ def test_check_rejects_unknown_configuration(
     assert message in error
 
 
+def test_check_json_emits_versioned_machine_readable_configuration_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_passing_project(tmp_path, tool_specx="unknown = true")
+
+    exit_code = main(["check", str(tmp_path), "--output-format", "json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+    assert exit_code == 2
+    assert captured.out == ""
+    assert payload == {
+        "command": "check",
+        "error": {
+            "available": [],
+            "code": "configuration.error",
+            "details": {},
+            "hint": None,
+            "message": "unknown [tool.specx] keys: ['unknown']",
+            "suggestions": [],
+        },
+        "exit_code": 2,
+        "root": str(tmp_path.resolve()),
+        "version": 2,
+    }
+
+
 def test_check_rejects_malformed_pyproject(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

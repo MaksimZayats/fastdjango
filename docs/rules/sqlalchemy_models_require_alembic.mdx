@@ -59,9 +59,14 @@ The migration integration module needs one executable test whose every passing p
 head and performs a drift check. Module-, class-, or function-level unconditional pytest skip/xfail
 markers disable evidence. Statically false conditional markers remain eligible. Calls inside
 `pytest.raises`, `contextlib.suppress`, or exception handlers that can swallow failures do not count,
-and calls after exhaustive return/raise control flow are unreachable.
+and calls after exhaustive return/raise control flow are unreachable. Boolean short-circuiting,
+conditional expressions, and potentially empty comprehensions must actually guarantee a call before
+it contributes evidence.
 
 The rule also shell-tokenizes `migrate`, `makemigrations`, and `migration-check` recipes and requires
 them to invoke Alembic directly. Comments, `echo`, dead branches, swallowed failures, rebound Alembic
 imports, and uncalled helpers do not count. Common direct runners such as
 `uv run --locked alembic`, `env NAME=value alembic`, and absolute Alembic executables count.
+Make's `-` ignore-errors prefix and shell constructs that can replace Alembic's exit status, such as
+`|| true`, `; true`, backgrounding, or an unchecked pipeline, do not count. Silent (`@`) and forced
+recursive (`+`) Make prefixes remain valid when failures still propagate.

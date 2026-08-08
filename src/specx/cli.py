@@ -185,11 +185,16 @@ def check_command(
 ) -> None:
     """Check a complete Python project."""
 
+    project_root = root or Path.cwd()
     exit_code = _guard(
         lambda: _run_check(
-            project_root=root or Path.cwd(),
+            project_root=project_root,
             output_format=output_format.value,
-        )
+        ),
+        error_format=output_format,
+        error_contract_version=2,
+        command="check",
+        root=project_root,
     )
     if exit_code:
         raise typer.Exit(exit_code)
@@ -629,6 +634,7 @@ def _guard(
     action: Callable[[], T],
     *,
     error_format: OutputFormat = OutputFormat.TEXT,
+    error_contract_version: int = 1,
     command: str | None = None,
     root: Path | None = None,
 ) -> T:
@@ -638,7 +644,12 @@ def _guard(
         if error_format is OutputFormat.JSON:
             typer.echo(
                 json.dumps(
-                    _error_payload(error, command=command, root=root),
+                    _error_payload(
+                        error,
+                        command=command,
+                        root=root,
+                        version=error_contract_version,
+                    ),
                     indent=2,
                     sort_keys=True,
                     allow_nan=False,
@@ -679,6 +690,7 @@ def _error_payload(
     *,
     command: str | None,
     root: Path | None,
+    version: int = 1,
 ) -> dict[str, Any]:
     if isinstance(error, SpecxProjectError):
         code = error.code
@@ -705,7 +717,7 @@ def _error_payload(
         suggestions = []
         details = {}
     return {
-        "version": 1,
+        "version": version,
         "command": command,
         "root": str(root.expanduser().resolve()) if root is not None else None,
         "exit_code": 2,

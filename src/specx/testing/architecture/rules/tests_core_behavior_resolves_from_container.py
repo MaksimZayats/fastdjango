@@ -135,13 +135,23 @@ def _target_resolved_by_container(
         ):
             continue
         executable_nodes = _executable_function_nodes(function)
+        terminal_pytest_call_ids = frozenset(
+            id(node)
+            for node in executable_nodes
+            if isinstance(node, ast.Call)
+            and context.qualified_name(test_path, node.func) in {"pytest.skip", "pytest.xfail"}
+        )
         awaited_call_ids = {
             id(node.value)
             for node in executable_nodes
             if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
         }
         for call in (node for node in executable_nodes if isinstance(node, ast.Call)):
-            if not _node_is_reachable(function.body, call):
+            if not _node_is_reachable(
+                function.body,
+                call,
+                terminal_call_ids=terminal_pytest_call_ids,
+            ):
                 continue
             if not (
                 isinstance(call.func, ast.Attribute)
@@ -201,21 +211,47 @@ def _test_functions_with_owners(
     return tuple(found)
 
 
-def _node_is_reachable(statements: list[ast.stmt], target: ast.AST) -> bool:
+def _node_is_reachable(
+    statements: list[ast.stmt],
+    target: ast.AST,
+    *,
+    terminal_call_ids: frozenset[int] = frozenset(),
+) -> bool:
     for statement in statements:
         if any(node is target for node in ast.walk(statement)):
-            return _target_is_reachable_in_statement(statement, target)
-        if not _statement_can_fall_through(statement):
+            return _target_is_reachable_in_statement(
+                statement,
+                target,
+                terminal_call_ids=terminal_call_ids,
+            )
+        if not _statement_can_fall_through(
+            statement,
+            terminal_call_ids=terminal_call_ids,
+        ):
             return False
     return False
 
 
-def _target_is_reachable_in_statement(statement: ast.stmt, target: ast.AST) -> bool:
+def _target_is_reachable_in_statement(
+    statement: ast.stmt,
+    target: ast.AST,
+    *,
+    terminal_call_ids: frozenset[int],
+) -> bool:
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return False
     if isinstance(statement, (ast.If, ast.While)):
-        if any(node is target for node in ast.walk(statement.test)):
+        if _expression_contains_reachable_target(
+            statement.test,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        ):
             return True
+        if _expression_guarantees_terminal_call(
+            statement.test,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return False
         branches = (
             (statement.orelse,)
             if _is_statically_false(statement.test)
@@ -223,46 +259,202 @@ def _target_is_reachable_in_statement(statement: ast.stmt, target: ast.AST) -> b
             if _is_statically_true(statement.test)
             else (statement.body, statement.orelse)
         )
-        return any(_node_is_reachable(branch, target) for branch in branches)
+        return any(
+            _node_is_reachable(
+                branch,
+                target,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for branch in branches
+        )
     if isinstance(statement, (ast.For, ast.AsyncFor)):
-        if any(node is target for node in ast.walk(statement.iter)):
+        if _expression_contains_reachable_target(
+            statement.iter,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        ):
             return True
-        return _node_is_reachable(statement.body, target) or _node_is_reachable(
+        if _expression_guarantees_terminal_call(
+            statement.iter,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return False
+        return _node_is_reachable(
+            statement.body,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        ) or _node_is_reachable(
             statement.orelse,
             target,
+            terminal_call_ids=terminal_call_ids,
         )
     if isinstance(statement, (ast.With, ast.AsyncWith)):
         if any(
-            any(node is target for node in ast.walk(item.context_expr)) for item in statement.items
+            _expression_contains_reachable_target(
+                item.context_expr,
+                target,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for item in statement.items
         ):
             return True
-        return _node_is_reachable(statement.body, target)
+        if any(
+            _expression_guarantees_terminal_call(
+                item.context_expr,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for item in statement.items
+        ):
+            return False
+        return _node_is_reachable(
+            statement.body,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        )
     if isinstance(statement, ast.Try):
-        body_outcomes = _block_exit_kinds(statement.body)
-        if _node_is_reachable(statement.body, target):
+        body_outcomes = _block_exit_kinds(
+            statement.body,
+            terminal_call_ids=terminal_call_ids,
+        )
+        if _node_is_reachable(
+            statement.body,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        ):
             return True
         if "raise" in body_outcomes and any(
-            _node_is_reachable(handler.body, target) for handler in statement.handlers
+            _node_is_reachable(
+                handler.body,
+                target,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for handler in statement.handlers
         ):
             return True
         if "fall" in body_outcomes and _node_is_reachable(
             statement.orelse,
             target,
+            terminal_call_ids=terminal_call_ids,
         ):
             return True
-        return _node_is_reachable(statement.finalbody, target)
+        return _node_is_reachable(
+            statement.finalbody,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        )
     if isinstance(statement, ast.Match):
-        if any(node is target for node in ast.walk(statement.subject)):
+        if _expression_contains_reachable_target(
+            statement.subject,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        ):
             return True
-        return any(_node_is_reachable(case.body, target) for case in statement.cases)
-    return True
+        if _expression_guarantees_terminal_call(
+            statement.subject,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return False
+        return any(
+            _node_is_reachable(
+                case.body,
+                target,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for case in statement.cases
+        )
+    return _expression_contains_reachable_target(
+        statement,
+        target,
+        terminal_call_ids=terminal_call_ids,
+    )
 
 
-def _statement_can_fall_through(statement: ast.stmt) -> bool:
-    return "fall" in _statement_exit_kinds(statement)
+def _expression_contains_reachable_target(
+    node: ast.AST,
+    target: ast.AST,
+    *,
+    terminal_call_ids: frozenset[int],
+) -> bool:
+    if node is target:
+        return True
+    if isinstance(node, ast.Call) and id(node) in terminal_call_ids:
+        return False
+    if isinstance(node, ast.BoolOp):
+        for value in node.values:
+            if _expression_contains_reachable_target(
+                value,
+                target,
+                terminal_call_ids=terminal_call_ids,
+            ):
+                return True
+            if _expression_guarantees_terminal_call(
+                value,
+                terminal_call_ids=terminal_call_ids,
+            ):
+                return False
+            if isinstance(node.op, ast.Or) and _is_statically_true(value):
+                return False
+            if isinstance(node.op, ast.And) and _is_statically_false(value):
+                return False
+        return False
+    if isinstance(node, ast.IfExp):
+        if _expression_contains_reachable_target(
+            node.test,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return True
+        if _expression_guarantees_terminal_call(
+            node.test,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return False
+        branches = (
+            (node.orelse,)
+            if _is_statically_false(node.test)
+            else (node.body,)
+            if _is_statically_true(node.test)
+            else (node.body, node.orelse)
+        )
+        return any(
+            _expression_contains_reachable_target(
+                branch,
+                target,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for branch in branches
+        )
+    for child in ast.iter_child_nodes(node):
+        if _expression_contains_reachable_target(
+            child,
+            target,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return True
+        if _expression_guarantees_terminal_call(
+            child,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return False
+    return False
 
 
-def _statement_exit_kinds(statement: ast.stmt) -> set[str]:
+def _statement_can_fall_through(
+    statement: ast.stmt,
+    *,
+    terminal_call_ids: frozenset[int] = frozenset(),
+) -> bool:
+    return "fall" in _statement_exit_kinds(
+        statement,
+        terminal_call_ids=terminal_call_ids,
+    )
+
+
+def _statement_exit_kinds(
+    statement: ast.stmt,
+    *,
+    terminal_call_ids: frozenset[int] = frozenset(),
+) -> set[str]:
     if isinstance(statement, ast.Return):
         return {"return"}
     if isinstance(statement, ast.Raise):
@@ -272,30 +464,87 @@ def _statement_exit_kinds(statement: ast.stmt) -> set[str]:
     if isinstance(statement, ast.Continue):
         return {"continue"}
     if isinstance(statement, ast.If):
+        if _expression_guarantees_terminal_call(
+            statement.test,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return {"raise"}
         if _is_statically_false(statement.test):
-            return _block_exit_kinds(statement.orelse)
+            return _block_exit_kinds(
+                statement.orelse,
+                terminal_call_ids=terminal_call_ids,
+            )
         if _is_statically_true(statement.test):
-            return _block_exit_kinds(statement.body)
-        return _block_exit_kinds(statement.body) | _block_exit_kinds(statement.orelse)
+            return _block_exit_kinds(
+                statement.body,
+                terminal_call_ids=terminal_call_ids,
+            )
+        return _block_exit_kinds(
+            statement.body,
+            terminal_call_ids=terminal_call_ids,
+        ) | _block_exit_kinds(
+            statement.orelse,
+            terminal_call_ids=terminal_call_ids,
+        )
     if isinstance(statement, ast.While):
+        if _expression_guarantees_terminal_call(
+            statement.test,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return {"raise"}
         if _is_statically_false(statement.test):
-            return _block_exit_kinds(statement.orelse)
-        body_outcomes = _block_exit_kinds(statement.body)
+            return _block_exit_kinds(
+                statement.orelse,
+                terminal_call_ids=terminal_call_ids,
+            )
+        body_outcomes = _block_exit_kinds(
+            statement.body,
+            terminal_call_ids=terminal_call_ids,
+        )
         outcomes = body_outcomes - {"break", "continue", "fall"}
         if "break" in body_outcomes:
             outcomes.add("fall")
         if not _is_statically_true(statement.test):
-            outcomes.update(_block_exit_kinds(statement.orelse))
+            outcomes.update(
+                _block_exit_kinds(
+                    statement.orelse,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
         return outcomes
     if isinstance(statement, (ast.For, ast.AsyncFor)):
-        body_outcomes = _block_exit_kinds(statement.body)
+        if _expression_guarantees_terminal_call(
+            statement.iter,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return {"raise"}
+        body_outcomes = _block_exit_kinds(
+            statement.body,
+            terminal_call_ids=terminal_call_ids,
+        )
         outcomes = body_outcomes - {"break", "continue", "fall"}
         if "break" in body_outcomes:
             outcomes.add("fall")
-        outcomes.update(_block_exit_kinds(statement.orelse))
+        outcomes.update(
+            _block_exit_kinds(
+                statement.orelse,
+                terminal_call_ids=terminal_call_ids,
+            )
+        )
         return outcomes
     if isinstance(statement, (ast.With, ast.AsyncWith)):
-        outcomes = _block_exit_kinds(statement.body)
+        if any(
+            _expression_guarantees_terminal_call(
+                item.context_expr,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for item in statement.items
+        ):
+            return {"raise"}
+        outcomes = _block_exit_kinds(
+            statement.body,
+            terminal_call_ids=terminal_call_ids,
+        )
         if any(
             isinstance(node, ast.Call)
             for item in statement.items
@@ -304,29 +553,57 @@ def _statement_exit_kinds(statement: ast.stmt) -> set[str]:
             outcomes.add("raise")
         return outcomes
     if isinstance(statement, ast.Try):
-        body_outcomes = _block_exit_kinds(statement.body)
+        body_outcomes = _block_exit_kinds(
+            statement.body,
+            terminal_call_ids=terminal_call_ids,
+        )
         before_finally = body_outcomes - {"fall"}
         if "fall" in body_outcomes:
-            before_finally.update(_block_exit_kinds(statement.orelse))
+            before_finally.update(
+                _block_exit_kinds(
+                    statement.orelse,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
         if "raise" in body_outcomes and statement.handlers:
             before_finally.update(
                 outcome
                 for handler in statement.handlers
-                for outcome in _block_exit_kinds(handler.body)
+                for outcome in _block_exit_kinds(
+                    handler.body,
+                    terminal_call_ids=terminal_call_ids,
+                )
             )
-        final_outcomes = _block_exit_kinds(statement.finalbody)
+        final_outcomes = _block_exit_kinds(
+            statement.finalbody,
+            terminal_call_ids=terminal_call_ids,
+        )
         outcomes = final_outcomes - {"fall"}
         if "fall" in final_outcomes:
             outcomes.update(before_finally)
         return outcomes
     if isinstance(statement, ast.Match):
+        if _expression_guarantees_terminal_call(
+            statement.subject,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return {"raise"}
         exhaustive = any(
             case.guard is None and _pattern_is_irrefutable(case.pattern) for case in statement.cases
         )
-        outcomes = {outcome for case in statement.cases for outcome in _block_exit_kinds(case.body)}
+        outcomes = {
+            outcome
+            for case in statement.cases
+            for outcome in _block_exit_kinds(
+                case.body,
+                terminal_call_ids=terminal_call_ids,
+            )
+        }
         if not exhaustive:
             outcomes.add("fall")
         return outcomes
+    if _expression_guarantees_terminal_call(statement, terminal_call_ids=terminal_call_ids):
+        return {"raise"}
     outcomes = {"fall"}
     if any(isinstance(node, ast.Call) for node in _statement_scope_nodes(statement)):
         outcomes.add("raise")
@@ -350,13 +627,73 @@ def _statement_scope_nodes(statement: ast.stmt) -> tuple[ast.AST, ...]:
     return tuple(nodes)
 
 
-def _block_exit_kinds(statements: list[ast.stmt]) -> set[str]:
+def _expression_guarantees_terminal_call(
+    node: ast.AST,
+    *,
+    terminal_call_ids: frozenset[int],
+) -> bool:
+    if isinstance(node, ast.Call) and id(node) in terminal_call_ids:
+        return True
+    if isinstance(node, ast.BoolOp):
+        for value in node.values:
+            if _expression_guarantees_terminal_call(
+                value,
+                terminal_call_ids=terminal_call_ids,
+            ):
+                return True
+            if isinstance(node.op, ast.Or) and not _is_statically_false(value):
+                return False
+            if isinstance(node.op, ast.And) and not _is_statically_true(value):
+                return False
+        return False
+    if isinstance(node, ast.IfExp):
+        if _expression_guarantees_terminal_call(
+            node.test,
+            terminal_call_ids=terminal_call_ids,
+        ):
+            return True
+        if _is_statically_false(node.test):
+            return _expression_guarantees_terminal_call(
+                node.orelse,
+                terminal_call_ids=terminal_call_ids,
+            )
+        if _is_statically_true(node.test):
+            return _expression_guarantees_terminal_call(
+                node.body,
+                terminal_call_ids=terminal_call_ids,
+            )
+        return all(
+            _expression_guarantees_terminal_call(
+                branch,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for branch in (node.body, node.orelse)
+        )
+    return any(
+        _expression_guarantees_terminal_call(
+            child,
+            terminal_call_ids=terminal_call_ids,
+        )
+        for child in ast.iter_child_nodes(node)
+    )
+
+
+def _block_exit_kinds(
+    statements: list[ast.stmt],
+    *,
+    terminal_call_ids: frozenset[int] = frozenset(),
+) -> set[str]:
     outcomes = {"fall"}
     for statement in statements:
         if "fall" not in outcomes:
             break
         outcomes.remove("fall")
-        outcomes.update(_statement_exit_kinds(statement))
+        outcomes.update(
+            _statement_exit_kinds(
+                statement,
+                terminal_call_ids=terminal_call_ids,
+            )
+        )
     return outcomes
 
 
@@ -505,10 +842,21 @@ def _defines_container_fixture(
     context: ArchitectureContext,
 ) -> bool:
     return any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and _fixture_exposed_name(node, path=path, context=context) == "container"
-        for node in tree.body
+        _fixture_exposed_name(function, path=path, context=context) == "container"
+        for function in _fixture_functions(tree.body)
     )
+
+
+def _fixture_functions(
+    statements: list[ast.stmt],
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for statement in statements:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions.append(statement)
+        elif isinstance(statement, ast.ClassDef):
+            functions.extend(_fixture_functions(statement.body))
+    return tuple(functions)
 
 
 def _fixture_exposed_name(

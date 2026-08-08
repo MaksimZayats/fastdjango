@@ -17,6 +17,7 @@ from specx.testing.architecture.rules._call_analysis import (
     class_hierarchy,
     class_method_declarations,
     function_behavior_nodes,
+    reachable_behavior_functions,
     resolved_call_name,
 )
 from specx.testing.architecture.rules._shared import ArchitectureRuleBase, violation
@@ -35,20 +36,21 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
         findings: list[SpecxArchitectureViolation] = []
         core_root = context.src_root / "core"
         definition_index = class_definition_base_index(context)
-        runtime_settings_names = _project_subclasses_of(
-            context,
-            exact_bases={
-                "pydantic_settings.BaseSettings",
-                "specx.infrastructure.foundation.settings.BaseRuntimeSettings",
-            },
-        )
+        runtime_settings_bases = {
+            "pydantic_settings.BaseSettings",
+            "specx.infrastructure.foundation.settings.BaseRuntimeSettings",
+        }
+        runtime_settings_names = {
+            "specx.infrastructure.foundation.settings.BaseRuntimeSettings"
+        } | _project_subclasses_of(context, exact_bases=runtime_settings_bases)
+        pydantic_bases = {
+            "pydantic.BaseModel",
+            "pydantic.RootModel",
+            "pydantic.root_model.RootModel",
+        }
         project_pydantic_names = _project_subclasses_of(
             context,
-            exact_bases={
-                "pydantic.BaseModel",
-                "pydantic.RootModel",
-                "pydantic.root_model.RootModel",
-            },
+            exact_bases=pydantic_bases,
             exact_decorators={"pydantic.dataclasses.dataclass"},
         )
         behavior_nodes = _behavior_method_node_ids(
@@ -63,7 +65,6 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
                 module
                 for module in context.imports(path)
                 if module_parts(module)[:1] in {("pydantic",), ("pydantic_settings",)}
-                or any(part in {"settings", "runtime_settings"} for part in module_parts(module))
             )
             bad_settings_references = sorted(
                 _qualified_project_type_references(
@@ -338,16 +339,22 @@ def _behavior_method_node_ids(
                 continue
             seen_methods: set[str] = set()
             for owner_path, owner in class_hierarchy(node, path=path, context=context):
-                for method_name, declarations in class_method_declarations(
+                for method_name, group in class_method_declarations(
                     owner,
                     path=owner_path,
                     context=context,
                 ).items():
                     if method_name in seen_methods:
                         continue
-                    seen_methods.add(method_name)
-                    _method_path, method = declarations[-1]
-                    node_ids.update(
-                        id(descendant) for descendant in function_behavior_nodes(method)
-                    )
+                    if group.always_bound:
+                        seen_methods.add(method_name)
+                    for declaration in group.declarations:
+                        for _helper_path, helper in reachable_behavior_functions(
+                            declaration.function,
+                            path=declaration.path,
+                            context=context,
+                        ):
+                            node_ids.update(
+                                id(descendant) for descendant in function_behavior_nodes(helper)
+                            )
     return node_ids

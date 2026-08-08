@@ -64,7 +64,28 @@ JSON output is a versioned integration contract:
 
 The root is absolute. Diagnostics contain severity, rule ID, message, path, line, column, remediation
 hint, and documentation URL; optional fields may be `null`. Internal symbol names are not included.
-This architecture contract is version 2. Project-management JSON remains independently versioned.
+Configuration, filesystem, and source-parsing failures also honor `--output-format json`. They are
+written to stderr, exit with status 2, and use this versioned error envelope:
+
+```json
+{
+  "command": "check",
+  "error": {
+    "available": [],
+    "code": "configuration.error",
+    "details": {},
+    "hint": null,
+    "message": "unknown [tool.specx] keys: ['unknown']",
+    "suggestions": []
+  },
+  "exit_code": 2,
+  "root": "/workspace/order-service",
+  "version": 2
+}
+```
+
+Successful reports, architecture violations, and check error envelopes are architecture contract
+version 2. Project-management JSON and its error envelope remain independently versioned.
 
 ## `specx rule list`
 

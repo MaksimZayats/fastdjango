@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -948,14 +949,15 @@ def _unimplemented_abstract_methods(
             )
             if declaration is None:
                 continue
-            if isinstance(
+            abstractness = _class_statement_method_abstractness(
                 declaration,
-                (ast.FunctionDef, ast.AsyncFunctionDef),
-            ) and _method_is_statically_abstract(
-                declaration,
+                method_name=method_name,
                 path=owner_path,
                 context=context,
-            ):
+            )
+            if abstractness is None:
+                continue
+            if abstractness:
                 required.add(method_name)
             break
     return required
@@ -968,7 +970,150 @@ def _class_bound_names(statement: ast.stmt) -> set[str]:
         return {target.id for target in statement.targets if isinstance(target, ast.Name)}
     if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
         return {statement.target.id} if statement.value is not None else set()
+    branches: tuple[list[ast.stmt], ...] = ()
+    if isinstance(statement, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+        branches = (statement.body, statement.orelse)
+    elif isinstance(statement, (ast.With, ast.AsyncWith)):
+        branches = (statement.body,)
+    elif isinstance(statement, ast.Try):
+        branches = (
+            statement.body,
+            statement.orelse,
+            statement.finalbody,
+            *(handler.body for handler in statement.handlers),
+        )
+    elif isinstance(statement, ast.Match):
+        branches = tuple(case.body for case in statement.cases)
+    if branches:
+        return {
+            name for branch in branches for child in branch for name in _class_bound_names(child)
+        }
     return set()
+
+
+def _class_statement_method_abstractness(
+    statement: ast.stmt,
+    *,
+    method_name: str,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool | None:
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if statement.name != method_name:
+            return None
+        return _method_is_statically_abstract(statement, path=path, context=context)
+    if isinstance(statement, ast.Assign):
+        return (
+            False
+            if any(
+                isinstance(target, ast.Name) and target.id == method_name
+                for target in statement.targets
+            )
+            else None
+        )
+    if isinstance(statement, ast.AnnAssign):
+        return (
+            False
+            if statement.value is not None
+            and isinstance(statement.target, ast.Name)
+            and statement.target.id == method_name
+            else None
+        )
+    if isinstance(statement, ast.If):
+        truth = _class_condition_static_truth(statement.test, path=path, context=context)
+        if truth is not None:
+            return _class_block_method_abstractness(
+                statement.body if truth else statement.orelse,
+                method_name=method_name,
+                path=path,
+                context=context,
+            )
+        return _merge_method_abstractness(
+            _class_block_method_abstractness(
+                branch,
+                method_name=method_name,
+                path=path,
+                context=context,
+            )
+            for branch in (statement.body, statement.orelse)
+        )
+    if (
+        isinstance(statement, ast.While)
+        and _class_condition_static_truth(
+            statement.test,
+            path=path,
+            context=context,
+        )
+        is False
+    ):
+        return _class_block_method_abstractness(
+            statement.orelse,
+            method_name=method_name,
+            path=path,
+            context=context,
+        )
+    branches: tuple[list[ast.stmt], ...] = ()
+    if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+        branches = (statement.body, statement.orelse)
+    elif isinstance(statement, (ast.With, ast.AsyncWith)):
+        branches = (statement.body,)
+    elif isinstance(statement, ast.Try):
+        branches = (
+            statement.body,
+            statement.orelse,
+            statement.finalbody,
+            *(handler.body for handler in statement.handlers),
+        )
+    elif isinstance(statement, ast.Match):
+        branches = tuple(case.body for case in statement.cases)
+    return _merge_method_abstractness(
+        _class_block_method_abstractness(
+            branch,
+            method_name=method_name,
+            path=path,
+            context=context,
+        )
+        for branch in branches
+    )
+
+
+def _class_block_method_abstractness(
+    statements: list[ast.stmt],
+    *,
+    method_name: str,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool | None:
+    for statement in reversed(statements):
+        result = _class_statement_method_abstractness(
+            statement,
+            method_name=method_name,
+            path=path,
+            context=context,
+        )
+        if result is not None:
+            return result
+    return None
+
+
+def _merge_method_abstractness(values: Iterable[bool | None]) -> bool | None:
+    resolved = tuple(value for value in values if isinstance(value, bool))
+    if not resolved:
+        return None
+    return False not in resolved
+
+
+def _class_condition_static_truth(
+    expression: ast.expr,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool | None:
+    if isinstance(expression, ast.Constant):
+        return bool(expression.value)
+    if context.qualified_names(path, expression) == frozenset({"typing.TYPE_CHECKING"}):
+        return False
+    return None
 
 
 def _method_is_statically_abstract(

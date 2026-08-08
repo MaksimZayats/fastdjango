@@ -38,6 +38,8 @@ project `get_container()` directly. Local or nearer fixtures, including
 `@pytest.fixture(name="container")`, and parameter reassignment invalidate the proof. Every exact
 path-qualified concrete target needs a call in the executable test body; dead branches, nested scopes,
 parametrized/defaulted shadows, function/module/class-level skipped or unconditional xfailed tests,
-swallowed failures, suppressed exceptions, patched resolve methods, and un-awaited `aresolve` calls
-do not count. Conditional xfail marks known statically false and handlers that re-raise remain valid
-evidence. Classes that retain inherited abstract methods are not resolution targets.
+runtime `pytest.skip()` or `pytest.xfail()` termination, short-circuited expressions, swallowed
+failures, suppressed exceptions, patched resolve methods, and un-awaited `aresolve` calls do not
+count. Conditional xfail marks known statically false, reachable conditional expressions, and
+handlers that re-raise remain valid evidence. Classes that retain inherited abstract methods are not
+resolution targets.

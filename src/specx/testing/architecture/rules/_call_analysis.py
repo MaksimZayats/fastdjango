@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import ast
 import builtins
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
@@ -252,6 +254,28 @@ def resolved_call_name(call: ast.Call, *, path: Path, context: ArchitectureConte
     return next(iter(names)) if len(names) == 1 else f"<ambiguous:{','.join(sorted(names))}>"
 
 
+def resolved_ambient_call_name(
+    call: ast.Call,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+) -> str:
+    names = resolved_call_names(call, path=path, context=context) | _parameter_default_call_names(
+        call,
+        function=function,
+        path=path,
+        context=context,
+    )
+    ambient = frozenset(
+        name for name in names if name in AMBIENT_EXACT_CALLS or name.startswith(AMBIENT_PREFIXES)
+    )
+    selected = ambient or names
+    return (
+        next(iter(selected)) if len(selected) == 1 else f"<ambiguous:{','.join(sorted(selected))}>"
+    )
+
+
 def resolved_call_names(
     call: ast.Call,
     *,
@@ -274,6 +298,13 @@ def is_ambient_runtime_call(
     class_path: Path | None = None,
 ) -> bool:
     names = resolved_call_names(call, path=path, context=context)
+    if function is not None:
+        names |= _parameter_default_call_names(
+            call,
+            function=function,
+            path=path,
+            context=context,
+        )
     if any(name in AMBIENT_EXACT_CALLS or name.startswith(AMBIENT_PREFIXES) for name in names):
         return True
     if any(
@@ -286,7 +317,6 @@ def is_ambient_runtime_call(
         return True
     if "datetime.datetime.fromtimestamp" in names and _timezone_argument_is_ambient(call):
         return True
-    name = resolved_call_name(call, path=path, context=context)
     if (
         isinstance(call.func, ast.Attribute)
         and call.func.attr == "astimezone"
@@ -305,8 +335,6 @@ def is_ambient_runtime_call(
         )
     ):
         return True
-    chain = attribute_chain(call.func)
-    receiver = attribute_chain(call.func.value) if isinstance(call.func, ast.Attribute) else ()
     path_roots: set[tuple[str, ...]] = (
         pathlib_object_chains(
             function,
@@ -319,13 +347,72 @@ def is_ambient_runtime_call(
         else set()
     )
     return bool(
-        chain
-        and chain[-1] in FILESYSTEM_METHODS
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr in FILESYSTEM_METHODS
         and (
-            "pathlib" in name
-            or any(_path_receiver_matches_root(receiver, root) for root in path_roots)
+            any(candidate.startswith("pathlib.") for candidate in names)
+            or _path_expression_matches_roots(call.func.value, path_roots)
         )
     )
+
+
+def _parameter_default_call_names(
+    call: ast.Call,
+    *,
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    path: Path,
+    context: ArchitectureContext,
+) -> frozenset[str]:
+    chain = attribute_chain(call.func)
+    if not chain:
+        return frozenset()
+    positional = (*function.args.posonlyargs, *function.args.args)
+    defaulted_positionals = (
+        positional[-len(function.args.defaults) :] if function.args.defaults else ()
+    )
+    defaults: dict[str, ast.expr] = {
+        argument.arg: default
+        for argument, default in zip(
+            defaulted_positionals,
+            function.args.defaults,
+            strict=True,
+        )
+    }
+    defaults.update(
+        {
+            argument.arg: default
+            for argument, default in zip(
+                function.args.kwonlyargs,
+                function.args.kw_defaults,
+                strict=True,
+            )
+            if default is not None
+        }
+    )
+    default = defaults.get(chain[0])
+    if default is None:
+        return frozenset()
+    return frozenset(
+        ".".join((qualified, *chain[1:])) for qualified in context.qualified_names(path, default)
+    )
+
+
+def _path_expression_matches_roots(
+    expression: ast.expr,
+    roots: set[tuple[str, ...]],
+) -> bool:
+    chain = attribute_chain(expression)
+    if chain and any(_path_receiver_matches_root(chain, root) for root in roots):
+        return True
+    if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Div):
+        return _path_expression_matches_roots(expression.left, roots)
+    if (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Attribute)
+        and expression.func.attr in PATH_PRESERVING_MEMBERS
+    ):
+        return _path_expression_matches_roots(expression.func.value, roots)
+    return False
 
 
 def _path_receiver_matches_root(
@@ -575,49 +662,421 @@ def function_behavior_nodes(
     return tuple(nodes)
 
 
+def reachable_behavior_functions(
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[tuple[Path, ast.AsyncFunctionDef | ast.FunctionDef], ...]:
+    """Return the root behavior and statically called project-local helpers."""
+
+    project_functions = _project_function_definitions(context)
+    queued: list[tuple[Path, ast.AsyncFunctionDef | ast.FunctionDef]] = [(path, function)]
+    reachable: list[tuple[Path, ast.AsyncFunctionDef | ast.FunctionDef]] = []
+    seen: set[tuple[Path, int]] = set()
+    while queued:
+        function_path, candidate = queued.pop(0)
+        key = (function_path, id(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        reachable.append((function_path, candidate))
+        nested = {
+            nested_function.name: nested_function
+            for nested_function in _direct_nested_functions(candidate)
+        }
+        for call in (
+            node for node in function_behavior_nodes(candidate) if isinstance(node, ast.Call)
+        ):
+            resolved = context.qualified_names(
+                function_path,
+                call.func,
+            ) | _parameter_default_call_names(
+                call,
+                function=candidate,
+                path=function_path,
+                context=context,
+            )
+            for qualified in resolved:
+                for helper_path, helper in project_functions.get(qualified, ()):
+                    queued.append((helper_path, helper))
+                if qualified.startswith("<local>."):
+                    nested_helper = nested.get(qualified.removeprefix("<local>."))
+                    if nested_helper is not None:
+                        queued.append((function_path, nested_helper))
+            if (
+                isinstance(call.func, ast.Name)
+                and (named_helper := nested.get(call.func.id)) is not None
+            ):
+                queued.append((function_path, named_helper))
+    return tuple(reachable)
+
+
+def _direct_nested_functions(
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+) -> tuple[ast.AsyncFunctionDef | ast.FunctionDef, ...]:
+    nested: list[ast.AsyncFunctionDef | ast.FunctionDef] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not function and isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            nested.append(node)
+            return
+        if node is not function and isinstance(node, (ast.ClassDef, ast.Lambda)):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(function)
+    return tuple(nested)
+
+
+MethodBinding = Literal["instance", "class", "static"]
+
+
+@dataclass(frozen=True, slots=True)
+class ClassMethodDeclaration:
+    path: Path
+    function: ast.FunctionDef | ast.AsyncFunctionDef
+    binding: MethodBinding
+
+
+@dataclass(frozen=True, slots=True)
+class ClassMethodGroup:
+    declarations: tuple[ClassMethodDeclaration, ...]
+    always_bound: bool
+
+
 def class_method_declarations(
     class_node: ast.ClassDef,
     *,
     path: Path,
     context: ArchitectureContext,
-) -> dict[str, tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...]]:
+) -> dict[str, ClassMethodGroup]:
     """Return runtime-effective method groups, including exact function assignments."""
 
     project_functions = _project_function_definitions(context)
-    declarations: dict[
+    return _class_block_method_groups(
+        class_node.body,
+        {},
+        path=path,
+        context=context,
+        project_functions=project_functions,
+    )
+
+
+def _class_block_method_groups(
+    statements: list[ast.stmt],
+    state: dict[str, ClassMethodGroup],
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    project_functions: dict[
         str,
-        list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]],
-    ] = {}
-    for child in class_node.body:
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            existing = declarations.get(child.name, [])
-            if existing and all(
-                _function_is_overload(function, path=function_path, context=context)
-                for function_path, function in existing
-            ):
-                existing.append((path, child))
-                declarations[child.name] = existing
-            elif _function_is_overload(child, path=path, context=context):
-                declarations.setdefault(child.name, []).append((path, child))
-            else:
-                declarations[child.name] = [(path, child)]
-            continue
-        targets: tuple[ast.expr, ...] = ()
-        value: ast.expr | None = None
-        if isinstance(child, ast.Assign):
-            targets, value = tuple(child.targets), child.value
-        elif isinstance(child, ast.AnnAssign) and child.value is not None:
-            targets, value = (child.target,), child.value
+        tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...],
+    ],
+) -> dict[str, ClassMethodGroup]:
+    current = dict(state)
+    for statement in statements:
+        current = _class_statement_method_groups(
+            statement,
+            current,
+            path=path,
+            context=context,
+            project_functions=project_functions,
+        )
+    return current
+
+
+def _class_statement_method_groups(
+    statement: ast.stmt,
+    state: dict[str, ClassMethodGroup],
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    project_functions: dict[
+        str,
+        tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...],
+    ],
+) -> dict[str, ClassMethodGroup]:
+    current = dict(state)
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        declaration = ClassMethodDeclaration(
+            path=path,
+            function=statement,
+            binding=_function_binding(statement, path=path, context=context),
+        )
+        existing = current.get(statement.name)
+        existing_declarations = existing.declarations if existing is not None else ()
+        if _function_is_overload(statement, path=path, context=context) or (
+            existing_declarations
+            and all(
+                _function_is_overload(
+                    candidate.function,
+                    path=candidate.path,
+                    context=context,
+                )
+                for candidate in existing_declarations
+            )
+        ):
+            declarations = (*existing_declarations, declaration)
+        else:
+            declarations = (declaration,)
+        current[statement.name] = ClassMethodGroup(
+            declarations=declarations,
+            always_bound=True,
+        )
+        return current
+    targets: tuple[ast.expr, ...] = ()
+    value: ast.expr | None = None
+    if isinstance(statement, ast.Assign):
+        targets, value = tuple(statement.targets), statement.value
+    elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+        targets, value = (statement.target,), statement.value
+    if targets:
+        binding, attached_expression = _attached_method_expression(
+            value,
+            path=path,
+            context=context,
+        )
+        qualified = context.qualified_name(path, attached_expression)
+        attached = project_functions.get(qualified)
         for target in targets:
             if not isinstance(target, ast.Name):
                 continue
-            qualified = context.qualified_name(path, value)
-            attached = project_functions.get(qualified)
-            if attached is None:
-                declarations.pop(target.id, None)
-            else:
-                declarations[target.id] = list(attached)
-    return {name: tuple(group) for name, group in declarations.items()}
+            declarations = (
+                tuple(
+                    ClassMethodDeclaration(
+                        path=function_path,
+                        function=function,
+                        binding=binding,
+                    )
+                    for function_path, function in attached
+                )
+                if attached is not None
+                else ()
+            )
+            current[target.id] = ClassMethodGroup(
+                declarations=declarations,
+                always_bound=True,
+            )
+        return current
+    if isinstance(statement, ast.If):
+        truth = _class_condition_truth(statement.test, path=path, context=context)
+        if truth is not None:
+            branch = statement.body if truth else statement.orelse
+            return _class_block_method_groups(
+                branch,
+                current,
+                path=path,
+                context=context,
+                project_functions=project_functions,
+            )
+        return _merge_class_method_states(
+            (
+                _class_block_method_groups(
+                    statement.body,
+                    current,
+                    path=path,
+                    context=context,
+                    project_functions=project_functions,
+                ),
+                _class_block_method_groups(
+                    statement.orelse,
+                    current,
+                    path=path,
+                    context=context,
+                    project_functions=project_functions,
+                ),
+            )
+        )
+    if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+        if (
+            isinstance(statement, ast.While)
+            and _class_condition_truth(
+                statement.test,
+                path=path,
+                context=context,
+            )
+            is False
+        ):
+            return _class_block_method_groups(
+                statement.orelse,
+                current,
+                path=path,
+                context=context,
+                project_functions=project_functions,
+            )
+        return _merge_class_method_states(
+            (
+                current,
+                _class_block_method_groups(
+                    statement.body,
+                    current,
+                    path=path,
+                    context=context,
+                    project_functions=project_functions,
+                ),
+                _class_block_method_groups(
+                    statement.orelse,
+                    current,
+                    path=path,
+                    context=context,
+                    project_functions=project_functions,
+                ),
+            )
+        )
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return _class_block_method_groups(
+            statement.body,
+            current,
+            path=path,
+            context=context,
+            project_functions=project_functions,
+        )
+    if isinstance(statement, ast.Try):
+        body = _class_block_method_groups(
+            statement.body,
+            current,
+            path=path,
+            context=context,
+            project_functions=project_functions,
+        )
+        body = _class_block_method_groups(
+            statement.orelse,
+            body,
+            path=path,
+            context=context,
+            project_functions=project_functions,
+        )
+        merged = _merge_class_method_states(
+            (
+                body,
+                *(
+                    _class_block_method_groups(
+                        handler.body,
+                        current,
+                        path=path,
+                        context=context,
+                        project_functions=project_functions,
+                    )
+                    for handler in statement.handlers
+                ),
+            )
+        )
+        return _class_block_method_groups(
+            statement.finalbody,
+            merged,
+            path=path,
+            context=context,
+            project_functions=project_functions,
+        )
+    if isinstance(statement, ast.Match):
+        has_catch_all = any(
+            case.guard is None
+            and isinstance(case.pattern, ast.MatchAs)
+            and case.pattern.pattern is None
+            and case.pattern.name is None
+            for case in statement.cases
+        )
+        fallback = () if has_catch_all else (current,)
+        return _merge_class_method_states(
+            tuple(
+                _class_block_method_groups(
+                    case.body,
+                    current,
+                    path=path,
+                    context=context,
+                    project_functions=project_functions,
+                )
+                for case in statement.cases
+            )
+            + fallback
+            or (current,)
+        )
+    return current
+
+
+def _merge_class_method_states(
+    states: tuple[dict[str, ClassMethodGroup], ...],
+) -> dict[str, ClassMethodGroup]:
+    names: set[str] = set()
+    for state in states:
+        names.update(state)
+    merged: dict[str, ClassMethodGroup] = {}
+    for name in names:
+        declarations: list[ClassMethodDeclaration] = []
+        seen: set[tuple[Path, int, MethodBinding]] = set()
+        for state in states:
+            group = state.get(name)
+            if group is None:
+                continue
+            for declaration in group.declarations:
+                key = (declaration.path, id(declaration.function), declaration.binding)
+                if key not in seen:
+                    seen.add(key)
+                    declarations.append(declaration)
+        merged[name] = ClassMethodGroup(
+            declarations=tuple(declarations),
+            always_bound=all(
+                (group := state.get(name)) is not None and group.always_bound for state in states
+            ),
+        )
+    return merged
+
+
+def _class_condition_truth(
+    expression: ast.expr,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool | None:
+    if isinstance(expression, ast.Constant):
+        return bool(expression.value)
+    if context.qualified_names(path, expression) == frozenset({"typing.TYPE_CHECKING"}):
+        return False
+    return None
+
+
+def _attached_method_expression(
+    value: ast.expr | None,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[MethodBinding, ast.expr | None]:
+    if isinstance(value, ast.Call) and len(value.args) == 1 and not value.keywords:
+        wrappers = context.qualified_names(path, value.func)
+        if wrappers in {
+            frozenset({"builtins.staticmethod"}),
+            frozenset({"staticmethod"}),
+        }:
+            return "static", value.args[0]
+        if wrappers in {
+            frozenset({"builtins.classmethod"}),
+            frozenset({"classmethod"}),
+        }:
+            return "class", value.args[0]
+    return "instance", value
+
+
+def _function_binding(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> MethodBinding:
+    decorators = {
+        qualified
+        for decorator in function.decorator_list
+        for qualified in context.qualified_names(
+            path,
+            decorator.func if isinstance(decorator, ast.Call) else decorator,
+        )
+    }
+    if decorators & {"builtins.staticmethod", "staticmethod"}:
+        return "static"
+    if decorators & {"builtins.classmethod", "classmethod"}:
+        return "class"
+    return "instance"
 
 
 def _project_function_definitions(
@@ -805,14 +1264,14 @@ def call_is_injected_collaborator_or_uow(
     class_path: Path | None = None,
 ) -> bool:
     hierarchy = class_hierarchy(class_node, path=class_path or path, context=context)
-    effective_annotations: dict[str, tuple[Path, ast.expr]] = {}
+    effective_bindings: dict[str, tuple[Path, ast.expr | None]] = {}
     for node_path, node in hierarchy:
-        for child in node.body:
-            if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
-                effective_annotations.setdefault(child.target.id, (node_path, child.annotation))
+        for field, annotation in _class_direct_field_bindings(node).items():
+            effective_bindings.setdefault(field, (node_path, annotation))
     injected_payloads = {
         field: payload
-        for field, (node_path, annotation) in effective_annotations.items()
+        for field, (node_path, annotation) in effective_bindings.items()
+        if annotation is not None
         if (
             payload := _injected_annotation_payload(
                 annotation,
@@ -860,6 +1319,28 @@ def call_is_injected_collaborator_or_uow(
         and not _self_fields_reassigned_before(function, call, fields=manager_fields)
         and all(resolved_chain[0] in active_uows for resolved_chain in resolved_chains)
     )
+
+
+def _class_direct_field_bindings(class_node: ast.ClassDef) -> dict[str, ast.expr | None]:
+    annotations: dict[str, ast.expr] = {}
+    runtime_bound: set[str] = set()
+    for statement in reversed(class_node.body):
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            runtime_bound.add(statement.name)
+            continue
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    runtime_bound.add(target.id)
+            continue
+        if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+            annotations.setdefault(statement.target.id, statement.annotation)
+            if statement.value is not None:
+                runtime_bound.add(statement.target.id)
+    return {
+        field: None if field in runtime_bound else annotations.get(field)
+        for field in runtime_bound | annotations.keys()
+    }
 
 
 def _self_fields_reassigned_before(

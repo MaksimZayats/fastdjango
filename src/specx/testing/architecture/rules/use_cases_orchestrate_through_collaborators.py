@@ -64,24 +64,25 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
                     path=path,
                     context=context,
                 ):
-                    for method_name, declarations in class_method_declarations(
+                    for method_name, group in class_method_declarations(
                         method_owner,
                         path=method_path,
                         context=context,
                     ).items():
                         if method_name.startswith("__") or method_name in seen_methods:
                             continue
-                        seen_methods.add(method_name)
-                        function_path, function = declarations[-1]
-                        findings.extend(
-                            self._check_method(
-                                context,
-                                path=function_path,
-                                use_case_path=path,
-                                use_case_class=class_node,
-                                function=function,
+                        if group.always_bound:
+                            seen_methods.add(method_name)
+                        for declaration in group.declarations:
+                            findings.extend(
+                                self._check_method(
+                                    context,
+                                    path=declaration.path,
+                                    use_case_path=path,
+                                    use_case_class=class_node,
+                                    function=declaration.function,
+                                )
                             )
-                        )
         unique: dict[
             tuple[Path | None, int | None, int | None, str],
             SpecxArchitectureViolation,

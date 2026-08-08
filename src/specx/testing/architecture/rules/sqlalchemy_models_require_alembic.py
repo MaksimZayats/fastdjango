@@ -311,13 +311,32 @@ def _valid_make_recipe(target: str, recipe: str) -> bool:
         "migration-check": ("alembic", "check"),
     }
     commands = [
-        _shell_tokens(line.lstrip("\t@- "))
+        command
         for line in recipe.splitlines()
-        if line.startswith("\t") and not line.lstrip("\t@- ").startswith("#")
+        if (command := _make_recipe_command(line)) is not None
     ]
     return any(
-        _invokes_alembic(command, action=required_fragments[target][1]) for command in commands
+        not _shell_command_can_mask_failure(command)
+        and _invokes_alembic(command, action=required_fragments[target][1])
+        for command in commands
     )
+
+
+def _make_recipe_command(line: str) -> tuple[str, ...] | None:
+    if not line.startswith("\t"):
+        return None
+    command = line.lstrip("\t ")
+    ignores_errors = False
+    while command[:1] in {"@", "+", "-"}:
+        ignores_errors = ignores_errors or command[0] == "-"
+        command = command[1:].lstrip()
+    if not command or command.startswith("#") or ignores_errors:
+        return None
+    return _shell_tokens(command)
+
+
+def _shell_command_can_mask_failure(tokens: tuple[str, ...]) -> bool:
+    return any(token in {"&", "|", "||", ";"} for token in tokens)
 
 
 def _parse_python(text: str) -> ast.Module | None:
@@ -839,63 +858,196 @@ def _add_expression_evidence(
     visited: frozenset[str],
     batch_aliases: frozenset[str],
 ) -> tuple[_EvidencePath, ...]:
-    current = paths
-    for call in _expression_calls(expression):
-        call_name = _call_evidence_name(
-            call,
-            bindings=bindings,
+    if expression is None:
+        return paths
+    if isinstance(expression, ast.BoolOp):
+        return _add_boolean_expression_evidence(
+            paths,
+            expression,
             scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
             batch_aliases=batch_aliases,
         )
-        current = tuple(
-            _EvidencePath(path.evidence | {call_name}, path.termination) for path in current
-        )
-        for helper_name in _referenced_local_functions(
-            call,
-            function=scope,
+    if isinstance(expression, ast.IfExp):
+        tested = _add_expression_evidence(
+            paths,
+            expression.test,
+            scope=scope,
+            bindings=bindings,
             functions=functions,
-        ):
-            if helper_name in visited:
-                continue
-            helper_paths = _passing_evidence_paths(
-                functions[helper_name],
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        truth = _static_truth(expression.test, bindings=bindings)
+        branches = (
+            (expression.body,)
+            if truth is True
+            else (expression.orelse,)
+            if truth is False
+            else (expression.body, expression.orelse)
+        )
+        return _deduplicate_paths(
+            tuple(
+                path
+                for branch in branches
+                for path in _add_expression_evidence(
+                    tested,
+                    branch,
+                    scope=scope,
+                    bindings=bindings,
+                    functions=functions,
+                    visited=visited,
+                    batch_aliases=batch_aliases,
+                )
+            )
+        )
+    if isinstance(expression, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        # Constructing any comprehension evaluates its outer iterable, but the body may
+        # execute zero times. Body-only calls therefore cannot prove migration behavior.
+        outer_iterable = expression.generators[0].iter if expression.generators else None
+        return _add_expression_evidence(
+            paths,
+            outer_iterable,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+    if isinstance(expression, ast.Lambda):
+        current = paths
+        defaults = (
+            *expression.args.defaults,
+            *(default for default in expression.args.kw_defaults if default is not None),
+        )
+        for default in defaults:
+            current = _add_expression_evidence(
+                current,
+                default,
+                scope=scope,
                 bindings=bindings,
                 functions=functions,
                 visited=visited,
+                batch_aliases=batch_aliases,
             )
-            if not helper_paths:
-                current = ()
-                break
-            current = _deduplicate_paths(
-                tuple(
-                    _EvidencePath(path.evidence | helper_evidence, path.termination)
-                    for path in current
-                    for helper_evidence in helper_paths
-                )
+        return current
+    if isinstance(expression, ast.Call):
+        current = paths
+        for child in (
+            expression.func,
+            *expression.args,
+            *(keyword.value for keyword in expression.keywords),
+        ):
+            current = _add_expression_evidence(
+                current,
+                child,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
+        return _add_call_evidence(
+            current,
+            expression,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+    current = paths
+    for descendant in ast.iter_child_nodes(expression):
+        if isinstance(descendant, (ast.expr, ast.keyword)):
+            child_expression = (
+                descendant.value if isinstance(descendant, ast.keyword) else descendant
+            )
+            current = _add_expression_evidence(
+                current,
+                child_expression,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
             )
     return current
 
 
-def _expression_calls(expression: ast.AST | None) -> tuple[ast.Call, ...]:
-    if expression is None:
-        return ()
-    calls: list[ast.Call] = []
+def _add_boolean_expression_evidence(
+    paths: tuple[_EvidencePath, ...],
+    expression: ast.BoolOp,
+    *,
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: frozenset[str],
+    batch_aliases: frozenset[str],
+) -> tuple[_EvidencePath, ...]:
+    current = paths
+    completed: tuple[_EvidencePath, ...] = ()
+    for value in expression.values:
+        current = _add_expression_evidence(
+            current,
+            value,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        truth = _static_truth(value, bindings=bindings)
+        stops = truth is False if isinstance(expression.op, ast.And) else truth is True
+        continues = truth is True if isinstance(expression.op, ast.And) else truth is False
+        if stops:
+            return _deduplicate_paths((*completed, *current))
+        if not continues:
+            completed = _deduplicate_paths((*completed, *current))
+    return _deduplicate_paths((*completed, *current))
 
-    def visit(node: ast.AST) -> None:
-        if node is not expression and isinstance(
-            node,
-            (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
-        ):
-            return
-        if isinstance(node, ast.Call):
-            calls.append(node)
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, ast.stmt):
-                continue
-            visit(child)
 
-    visit(expression)
-    return tuple(calls)
+def _add_call_evidence(
+    paths: tuple[_EvidencePath, ...],
+    call: ast.Call,
+    *,
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: frozenset[str],
+    batch_aliases: frozenset[str],
+) -> tuple[_EvidencePath, ...]:
+    call_name = _call_evidence_name(
+        call,
+        bindings=bindings,
+        scope=scope,
+        batch_aliases=batch_aliases,
+    )
+    current = tuple(_EvidencePath(path.evidence | {call_name}, path.termination) for path in paths)
+    for helper_name in _referenced_local_functions(
+        call,
+        function=scope,
+        functions=functions,
+    ):
+        if helper_name in visited:
+            continue
+        helper_paths = _passing_evidence_paths(
+            functions[helper_name],
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+        )
+        if not helper_paths:
+            return ()
+        current = _deduplicate_paths(
+            tuple(
+                _EvidencePath(path.evidence | helper_evidence, path.termination)
+                for path in current
+                for helper_evidence in helper_paths
+            )
+        )
+    return current
 
 
 def _call_evidence_name(
@@ -1469,7 +1621,10 @@ def _module_scope_nodes(tree: ast.Module) -> tuple[ast.AST, ...]:
 
 def _shell_tokens(command: str) -> tuple[str, ...]:
     try:
-        return tuple(shlex.split(command, comments=True, posix=True))
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        return tuple(lexer)
     except ValueError:
         return ()
 

@@ -11,6 +11,7 @@ from specx.testing.architecture.context import (
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._call_analysis import (
+    MethodBinding,
     class_hierarchy,
     class_method_declarations,
 )
@@ -29,7 +30,7 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
         definition_index = class_definition_base_index(context)
         service_bases = {"BasePureService", "BaseReadService", "BaseEffectService"}
         findings: list[SpecxArchitectureViolation] = []
-        checked_declarations: set[tuple[Path, int]] = set()
+        checked_declarations: set[tuple[Path, int, MethodBinding]] = set()
         for path in context.source_paths():
             for class_node in (
                 node for node in ast.walk(context.tree(path)) if isinstance(node, ast.ClassDef)
@@ -51,27 +52,32 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
                     path=path,
                     context=context,
                 ):
-                    for method_name, declarations in class_method_declarations(
+                    for method_name, group in class_method_declarations(
                         method_owner,
                         path=method_path,
                         context=context,
                     ).items():
                         if method_name.startswith("_") or method_name in seen_methods:
                             continue
-                        seen_methods.add(method_name)
-                        for declaration_path, method in declarations:
-                            declaration = (declaration_path, id(method))
-                            if declaration in checked_declarations:
+                        if group.always_bound:
+                            seen_methods.add(method_name)
+                        for method_declaration in group.declarations:
+                            declaration_key = (
+                                method_declaration.path,
+                                id(method_declaration.function),
+                                method_declaration.binding,
+                            )
+                            if declaration_key in checked_declarations:
                                 continue
-                            checked_declarations.add(declaration)
+                            checked_declarations.add(declaration_key)
                             findings.extend(
                                 _method_findings(
                                     self.id,
-                                    path=declaration_path,
+                                    path=method_declaration.path,
                                     class_node=class_node,
-                                    method=method,
+                                    method=method_declaration.function,
                                     method_name=method_name,
-                                    context=context,
+                                    binding=method_declaration.binding,
                                 )
                             )
         return tuple(findings)
@@ -84,10 +90,10 @@ def _method_findings(
     class_node: ast.ClassDef,
     method: ast.FunctionDef | ast.AsyncFunctionDef,
     method_name: str,
-    context: ArchitectureContext,
+    binding: MethodBinding,
 ) -> list[SpecxArchitectureViolation]:
     positional_arguments = [*method.args.posonlyargs, *method.args.args]
-    if positional_arguments and not _is_static_method(method, path=path, context=context):
+    if positional_arguments and binding != "static":
         positional_arguments = positional_arguments[1:]
     positional = [argument.arg for argument in positional_arguments]
     if method.args.vararg is not None:
@@ -103,19 +109,3 @@ def _method_findings(
             message=f"public parameters must be keyword-only: {positional}",
         )
     ]
-
-
-def _is_static_method(
-    method: ast.FunctionDef | ast.AsyncFunctionDef,
-    *,
-    path: Path,
-    context: ArchitectureContext,
-) -> bool:
-    return any(
-        context.qualified_name(
-            path,
-            decorator.func if isinstance(decorator, ast.Call) else decorator,
-        )
-        in {"builtins.staticmethod", "staticmethod"}
-        for decorator in method.decorator_list
-    )

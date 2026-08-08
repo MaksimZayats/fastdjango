@@ -18,7 +18,8 @@ from specx.testing.architecture.rules._call_analysis import (
     class_method_declarations,
     function_behavior_nodes,
     is_ambient_runtime_call,
-    resolved_call_name,
+    reachable_behavior_functions,
+    resolved_ambient_call_name,
 )
 from specx.testing.architecture.rules._shared import (
     ArchitectureRuleBase,
@@ -80,29 +81,57 @@ class CoreBehaviorNoAmbientRuntimeAccessRule(ArchitectureRuleBase):
                     path=path,
                     context=context,
                 ):
-                    for method_name, declarations in class_method_declarations(
+                    for method_name, group in class_method_declarations(
                         method_owner,
                         path=method_path,
                         context=context,
                     ).items():
                         if method_name in seen_methods:
                             continue
-                        seen_methods.add(method_name)
-                        function_path, function = declarations[-1]
-                        findings.extend(
-                            _ambient_method_findings(
-                                self.id,
-                                context=context,
-                                path=function_path,
-                                behavior_path=path,
-                                behavior_class=behavior_class,
-                                function=function,
+                        if group.always_bound:
+                            seen_methods.add(method_name)
+                        for declaration in group.declarations:
+                            findings.extend(
+                                _ambient_method_findings(
+                                    self.id,
+                                    context=context,
+                                    path=declaration.path,
+                                    behavior_path=path,
+                                    behavior_class=behavior_class,
+                                    function=declaration.function,
+                                )
                             )
-                        )
         return _deduplicate_declaration_findings(findings)
 
 
 def _ambient_method_findings(
+    rule_id: SpecxRuleId,
+    *,
+    context: ArchitectureContext,
+    path: Path,
+    behavior_path: Path,
+    behavior_class: ast.ClassDef,
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[SpecxArchitectureViolation]:
+    return [
+        finding
+        for helper_path, helper in reachable_behavior_functions(
+            function,
+            path=path,
+            context=context,
+        )
+        for finding in _ambient_function_findings(
+            rule_id,
+            context=context,
+            path=helper_path,
+            behavior_path=behavior_path,
+            behavior_class=behavior_class,
+            function=helper,
+        )
+    ]
+
+
+def _ambient_function_findings(
     rule_id: SpecxRuleId,
     *,
     context: ArchitectureContext,
@@ -134,16 +163,19 @@ def _ambient_method_findings(
         )
     ]
     for call in ambient_calls:
+        qualified_name = resolved_ambient_call_name(
+            call,
+            path=path,
+            context=context,
+            function=function,
+        )
         findings.append(
             violation(
                 rule_id,
                 path=path,
                 symbol=behavior_class.name,
                 node=call,
-                message=(
-                    "direct ambient runtime call "
-                    f"{resolved_call_name(call, path=path, context=context)!r}"
-                ),
+                message=(f"direct ambient runtime call {qualified_name!r}"),
             )
         )
     tree = context.tree(path)
