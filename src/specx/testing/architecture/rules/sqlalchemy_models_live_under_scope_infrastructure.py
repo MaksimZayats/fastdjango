@@ -6,7 +6,7 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     class_definition_base_index,
     class_has_foundation_base_at,
-    class_is_statically_abstract,
+    class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -33,8 +33,10 @@ class SQLAlchemyModelsLiveUnderScopeInfrastructureRule(ArchitectureRuleBase):
                 and relative.parts[2] == "infrastructure"
             )
             for node in ast.walk(context.tree(path)):
-                if not isinstance(node, ast.ClassDef) or class_is_statically_abstract(
-                    node, context.aliases(path)
+                if not isinstance(node, ast.ClassDef) or class_is_statically_abstract_at(
+                    node,
+                    source_path=path,
+                    context=context,
                 ):
                     continue
                 if not correctly_placed and class_has_foundation_base_at(

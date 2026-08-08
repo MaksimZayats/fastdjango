@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import ast
+import configparser
+import re
 from pathlib import Path
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
     class_definition_base_index,
     class_has_foundation_base_at,
-    class_is_statically_abstract,
+    class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -79,7 +81,11 @@ def _has_concrete_model(context: ArchitectureContext) -> bool:
     for path in context.source_paths():
         if any(
             isinstance(node, ast.ClassDef)
-            and not class_is_statically_abstract(node, context.aliases(path))
+            and not class_is_statically_abstract_at(
+                node,
+                source_path=path,
+                context=context,
+            )
             and class_has_foundation_base_at(
                 node,
                 "BaseSQLAlchemyModel",
@@ -105,21 +111,68 @@ def _required_files(context: ArchitectureContext) -> dict[str, Path]:
 
 
 def _has_required_markers(name: str, text: str) -> bool:
-    markers = {
-        "alembic.ini": (("[alembic]",), ("script_location",)),
-        "migrations/env.py": (("context.configure",), ("run_migrations",)),
-        "migrations/script.py.mako": (("def upgrade",), ("def downgrade",)),
-        "tests/integration/migrations/test_migrations.py": (
-            ("def test_", "async def test_"),
-            ("upgrade",),
-            ("compare_metadata", "produce_migrations", "command.check", "alembic check"),
-        ),
-    }
-    return all(any(option in text for option in alternatives) for alternatives in markers[name])
+    if name == "alembic.ini":
+        parser = configparser.ConfigParser()
+        try:
+            parser.read_string(text)
+        except configparser.Error:
+            return False
+        return parser.has_section("alembic") and bool(
+            parser.get("alembic", "script_location", fallback="").strip()
+        )
+    if name == "migrations/script.py.mako":
+        executable = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        return all(
+            re.search(rf"^\s*def\s+{function}\s*\(", executable, re.MULTILINE)
+            for function in ("upgrade", "downgrade")
+        )
+    tree = _parse_python(text)
+    if tree is None:
+        return False
+    if name == "migrations/env.py":
+        return _has_call(tree, "context.configure") and any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("run_migrations")
+            for node in ast.walk(tree)
+        )
+    return (
+        any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+            for node in ast.walk(tree)
+        )
+        and any(_call_name(call).endswith("upgrade") for call in _calls(tree))
+        and any(
+            any(
+                marker in _call_name(call)
+                for marker in ("compare_metadata", "produce_migrations", "check", "drift")
+            )
+            for call in _calls(tree)
+        )
+    )
 
 
 def _valid_revision(text: str) -> bool:
-    return all(marker in text for marker in ("revision", "def upgrade", "def downgrade"))
+    tree = _parse_python(text)
+    if tree is None:
+        return False
+    assigned_revision = any(
+        isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "revision"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        and bool(node.value.value)
+        for node in tree.body
+    )
+    functions = {
+        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    return assigned_revision and {"upgrade", "downgrade"} <= functions
 
 
 def _valid_make_recipe(target: str, recipe: str) -> bool:
@@ -128,4 +181,30 @@ def _valid_make_recipe(target: str, recipe: str) -> bool:
         "makemigrations": ("alembic", "revision"),
         "migration-check": ("alembic", "check"),
     }
-    return all(fragment in recipe for fragment in required_fragments[target])
+    commands = [
+        line.lstrip("\t@- ")
+        for line in recipe.splitlines()
+        if line.startswith("\t") and not line.lstrip("\t@- ").startswith("#")
+    ]
+    return any(
+        all(fragment in command for fragment in required_fragments[target]) for command in commands
+    )
+
+
+def _parse_python(text: str) -> ast.Module | None:
+    try:
+        return ast.parse(text)
+    except SyntaxError:
+        return None
+
+
+def _calls(tree: ast.Module) -> tuple[ast.Call, ...]:
+    return tuple(node for node in ast.walk(tree) if isinstance(node, ast.Call))
+
+
+def _call_name(call: ast.Call) -> str:
+    return ast.unparse(call.func)
+
+
+def _has_call(tree: ast.Module, name: str) -> bool:
+    return any(_call_name(call).endswith(name) for call in _calls(tree))

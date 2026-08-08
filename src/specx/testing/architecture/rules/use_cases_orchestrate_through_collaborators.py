@@ -6,6 +6,7 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     class_definition_base_index,
     class_has_foundation_base_at,
+    class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -46,6 +47,10 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
                     source_path=path,
                     context=context,
                     definition_index=definition_index,
+                ) or class_is_statically_abstract_at(
+                    class_node,
+                    source_path=path,
+                    context=context,
                 ):
                     continue
                 for function in (

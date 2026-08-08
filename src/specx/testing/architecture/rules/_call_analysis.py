@@ -23,6 +23,7 @@ AMBIENT_EXACT_CALLS = frozenset(
         "datetime.datetime.now",
         "datetime.datetime.today",
         "datetime.datetime.utcnow",
+        "io.open",
         "os.chdir",
         "os.getcwd",
         "os.getpid",
@@ -32,6 +33,7 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.mkdir",
         "os.makedirs",
         "os.putenv",
+        "os.urandom",
         "os.remove",
         "os.removedirs",
         "os.rename",
@@ -42,6 +44,18 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.stat",
         "os.system",
         "os.unsetenv",
+        "os.path.exists",
+        "os.path.getatime",
+        "os.path.getctime",
+        "os.path.getmtime",
+        "os.path.getsize",
+        "os.path.isdir",
+        "os.path.isfile",
+        "os.path.islink",
+        "os.path.ismount",
+        "os.path.lexists",
+        "os.path.samefile",
+        "sys.exit",
         "time.monotonic",
         "time.monotonic_ns",
         "time.perf_counter",
@@ -60,6 +74,7 @@ AMBIENT_EXACT_CALLS = frozenset(
 AMBIENT_PREFIXES = (
     "aiohttp.",
     "httpx.",
+    "platform.",
     "os.environ.",
     "random.",
     "requests.",
@@ -98,6 +113,34 @@ FILESYSTEM_METHODS = frozenset(
         "write_bytes",
         "write_text",
         "walk",
+    }
+)
+AMBIENT_VALUE_NAMES = frozenset(
+    {
+        "sys.argv",
+        "sys.base_prefix",
+        "sys.executable",
+        "sys.path",
+        "sys.platform",
+        "sys.prefix",
+    }
+)
+SAFE_STDLIB_CONSTRUCTORS = frozenset(
+    {
+        "datetime.date",
+        "datetime.datetime",
+        "datetime.time",
+        "datetime.timedelta",
+        "datetime.timezone",
+        "decimal.Decimal",
+        "fractions.Fraction",
+        "pathlib.Path",
+        "pathlib.PosixPath",
+        "pathlib.PurePath",
+        "pathlib.PurePosixPath",
+        "pathlib.PureWindowsPath",
+        "pathlib.WindowsPath",
+        "uuid.UUID",
     }
 )
 
@@ -156,23 +199,28 @@ def pathlib_object_chains(
             *function.args.args,
             *function.args.kwonlyargs,
         )
-        if context.qualified_name(path, argument.annotation).endswith("pathlib.Path")
+        if _annotation_contains_path(argument.annotation, path=path, context=context)
     }
     if class_node is not None:
-        names.update(
-            ("self", child.target.id)
-            for child in class_node.body
-            if isinstance(child, ast.AnnAssign)
-            and isinstance(child.target, ast.Name)
-            and context.qualified_name(path, child.annotation).endswith("pathlib.Path")
-        )
+        for node_path, hierarchy_node in class_hierarchy(class_node, path=path, context=context):
+            names.update(
+                ("self", child.target.id)
+                for child in hierarchy_node.body
+                if isinstance(child, ast.AnnAssign)
+                and isinstance(child.target, ast.Name)
+                and _annotation_contains_path(
+                    child.annotation,
+                    path=node_path,
+                    context=context,
+                )
+            )
     for node in ast.walk(function):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
             if not context.qualified_name(path, node.value.func).endswith("pathlib.Path"):
                 continue
             names.update((target.id,) for target in node.targets if isinstance(target, ast.Name))
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if context.qualified_name(path, node.annotation).endswith("pathlib.Path"):
+            if _annotation_contains_path(node.annotation, path=path, context=context):
                 names.add((node.target.id,))
     changed = True
     while changed:
@@ -195,6 +243,23 @@ def pathlib_object_chains(
     return names
 
 
+def _annotation_contains_path(
+    annotation: ast.expr | None,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    if annotation is None:
+        return False
+    if context.qualified_name(path, annotation) == "pathlib.Path":
+        return True
+    return any(
+        _annotation_contains_path(child, path=path, context=context)
+        for child in ast.iter_child_nodes(annotation)
+        if isinstance(child, ast.expr)
+    )
+
+
 def class_injected_field_names(class_node: ast.ClassDef, aliases: dict[str, str]) -> set[str]:
     return {
         child.target.id
@@ -203,6 +268,31 @@ def class_injected_field_names(class_node: ast.ClassDef, aliases: dict[str, str]
         and isinstance(child.target, ast.Name)
         and injected_type_name(child.annotation, aliases)
     }
+
+
+def class_injected_callable_field_names(
+    class_node: ast.ClassDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> set[str]:
+    fields: set[str] = set()
+    for child in class_node.body:
+        if not isinstance(child, ast.AnnAssign) or not isinstance(child.target, ast.Name):
+            continue
+        annotation = child.annotation
+        if not isinstance(annotation, ast.Subscript) or not context.qualified_name(
+            path, annotation.value
+        ).endswith("diwire.Injected"):
+            continue
+        dependency = annotation.slice
+        dependency_root = dependency.value if isinstance(dependency, ast.Subscript) else dependency
+        if context.qualified_name(path, dependency_root) in {
+            "collections.abc.Callable",
+            "typing.Callable",
+        }:
+            fields.add(child.target.id)
+    return fields
 
 
 def call_is_injected_collaborator_or_uow(
@@ -219,7 +309,24 @@ def call_is_injected_collaborator_or_uow(
         for node_path, node in hierarchy
         for field in class_injected_field_names(node, context.aliases(node_path))
     }
-    if self_attribute_root_name(call.func) in injected_fields:
+    callable_fields = {
+        field
+        for node_path, node in hierarchy
+        for field in class_injected_callable_field_names(
+            node,
+            path=node_path,
+            context=context,
+        )
+    }
+    direct_root = self_attribute_root_name(call.func)
+    resolved_chain = tuple(context.qualified_name(path, call.func).split("."))
+    resolved_injected_root = (
+        resolved_chain[1] if len(resolved_chain) >= 2 and resolved_chain[0] == "self" else None
+    )
+    if (
+        direct_root in injected_fields - callable_fields
+        or resolved_injected_root in injected_fields - callable_fields
+    ):
         return True
     manager_fields = {
         field
@@ -230,7 +337,9 @@ def call_is_injected_collaborator_or_uow(
     }
     active_uows = active_uow_names_from_manager_fields(function, manager_fields)
     chain = attribute_chain(call.func)
-    return bool(chain and chain[0] in active_uows)
+    return bool(
+        (chain and chain[0] in active_uows) or (resolved_chain and resolved_chain[0] in active_uows)
+    )
 
 
 def class_hierarchy(
@@ -274,7 +383,7 @@ def is_statically_recognized_constructor(
     context: ArchitectureContext,
 ) -> bool:
     resolved = resolved_call_name(call, path=path, context=context)
-    if resolved in project_class_qualified_names(context):
+    if resolved in project_class_qualified_names(context) or resolved in SAFE_STDLIB_CONSTRUCTORS:
         return True
     if not resolved.startswith("builtins."):
         return False
@@ -296,3 +405,23 @@ def ambient_environment_nodes(
         ):
             nodes.append(node)
     return tuple(nodes)
+
+
+def ambient_runtime_value_nodes(
+    tree: ast.Module,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[ast.expr, ...]:
+    """Return direct reads of ambient runtime values that are not calls."""
+
+    return tuple(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Name, ast.Attribute))
+        and isinstance(node.ctx, ast.Load)
+        and context.qualified_name(path, node) in AMBIENT_VALUE_NAMES
+        and not any(
+            isinstance(parent, ast.Attribute) and parent.value is node for parent in ast.walk(tree)
+        )
+    )

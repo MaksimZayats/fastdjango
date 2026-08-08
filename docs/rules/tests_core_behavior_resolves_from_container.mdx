@@ -32,6 +32,8 @@ def test_total(container: Container) -> None:
 
 ### Detection notes
 
-Checks each required mirrored unit module for a `test_` function with a `container` fixture and an
-explicit resolve call for every exact path-qualified concrete target. Statically abstract and
-`Base...` behavior classes are not resolution targets.
+Checks each required mirrored unit module for a `test_` function using the native `container`
+fixture from `tests/unit/conftest.py` and an explicit resolve call in that test's executable body for
+every exact path-qualified concrete target. Parametrized, defaulted, and module-local `container`
+shadows do not count, nor do calls hidden in nested scopes. Classes that retain inherited abstract
+methods are not resolution targets.

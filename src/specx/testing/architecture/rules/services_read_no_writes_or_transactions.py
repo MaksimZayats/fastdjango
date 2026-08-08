@@ -9,8 +9,8 @@ from specx.testing.architecture.context import (
     active_repository_names,
     call_is_rooted_in_names,
     calls_forbidden_method,
-    class_base_name_index,
-    class_has_foundation_base,
+    class_definition_base_index,
+    class_has_foundation_base_at,
     class_injected_unit_of_work_manager_field_names,
     repository_mutator_method_names,
     unit_of_work_argument_names,
@@ -34,7 +34,7 @@ class ReadServicesDoNotPerformWritesOrOwnTransactionsRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         mutator_names = repository_mutator_method_names(context)
         for path in context.core_service_paths():
             tree = context.tree(path)
@@ -43,7 +43,13 @@ class ReadServicesDoNotPerformWritesOrOwnTransactionsRule(ArchitectureRuleBase):
                 node
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ClassDef)
-                and class_has_foundation_base(node.name, "BaseReadService", base_index)
+                and class_has_foundation_base_at(
+                    node,
+                    "BaseReadService",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                )
             ]
             for class_node in read_services:
                 manager_fields = class_injected_unit_of_work_manager_field_names(

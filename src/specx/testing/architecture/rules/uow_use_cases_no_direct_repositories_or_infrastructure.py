@@ -4,8 +4,8 @@ import ast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_base_name_index,
-    class_injected_repository_field_names,
+    class_definition_base_index,
+    class_injected_repository_field_names_at,
     class_injected_unit_of_work_manager_field_names,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
@@ -13,7 +13,7 @@ from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._shared import (
     ArchitectureRuleBase,
     forbidden_use_case_persistence_dependency_fields,
-    is_use_case_class,
+    is_use_case_class_at,
     repository_calls_outside_manager_owned_uow,
     use_case_imports_persistence_infrastructure,
     violation,
@@ -32,7 +32,7 @@ class UseCasesDoNotInjectRepositoriesOrInfrastructureRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in (context.src_root / "core").glob("*/use_cases/**/*.py"):
             if path.name == "__init__.py" or path not in context.ast_project.files:
                 continue
@@ -46,14 +46,21 @@ class UseCasesDoNotInjectRepositoriesOrInfrastructureRule(ArchitectureRuleBase):
             for class_node in ast.walk(tree):
                 if not isinstance(class_node, ast.ClassDef):
                     continue
-                if not is_use_case_class(class_node, aliases, base_index):
+                if not is_use_case_class_at(
+                    class_node,
+                    path=path,
+                    context=context,
+                    definition_index=definition_index,
+                ):
                     continue
 
                 messages: list[str] = []
                 forbidden_fields = forbidden_use_case_persistence_dependency_fields(
                     class_node,
                     aliases,
-                    base_index,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
                 )
                 if forbidden_fields:
                     messages.append(f"injects {forbidden_fields}")
@@ -62,10 +69,12 @@ class UseCasesDoNotInjectRepositoriesOrInfrastructureRule(ArchitectureRuleBase):
                     class_node,
                     aliases,
                 )
-                repository_fields = class_injected_repository_field_names(
+                repository_fields = class_injected_repository_field_names_at(
                     class_node,
                     aliases,
-                    base_index,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
                 )
                 for child in class_node.body:
                     if (

@@ -33,6 +33,7 @@ class BillingService(BaseEffectService):
 
 ### Detection notes
 
-Checks every Python file beneath `core/`, including `__init__.py`, for Pydantic and settings imports,
-project runtime-settings annotations, and direct environment reads. Behavior-method environment calls
-belong to `core.behavior-no-ambient-runtime-access` so one source location has one diagnostic owner.
+Checks every Python file beneath `core/`, including `__init__.py`, for direct Pydantic/settings
+imports, imports and annotations of project types derived from Pydantic or runtime settings, and
+direct environment reads. Behavior-method environment calls belong to
+`core.behavior-no-ambient-runtime-access` so one source location has one diagnostic owner.

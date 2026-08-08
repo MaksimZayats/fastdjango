@@ -4,9 +4,9 @@ import ast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    category_suffix_from_base,
-    class_base_name_index,
-    nearest_foundation_base_names_for_class,
+    category_suffix_from_base_at,
+    class_definition_base_index,
+    nearest_foundation_base_names_for_class_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -26,7 +26,7 @@ class ClassesUseSuffixFromMostSpecificFoundationCategoryRule(ArchitectureRuleBas
     id: SpecxRuleId = SpecxRuleId.CLASSES_USE_SUFFIX_FROM_MOST_SPECIFIC_FOUNDATION_CATEGORY
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         violations: list[SpecxArchitectureViolation] = []
         for path in context.source_paths():
             if "foundation" in path.relative_to(context.src_root).parts:
@@ -35,11 +35,24 @@ class ClassesUseSuffixFromMostSpecificFoundationCategoryRule(ArchitectureRuleBas
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
                     continue
-                foundation_bases = nearest_foundation_base_names_for_class(node.name, base_index)
+                foundation_bases = nearest_foundation_base_names_for_class_at(
+                    node,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                )
                 suffixes = {
                     suffix
                     for found_base in foundation_bases
-                    if (suffix := category_suffix_from_base(found_base, base_index)) is not None
+                    if (
+                        suffix := category_suffix_from_base_at(
+                            found_base,
+                            source_path=path,
+                            context=context,
+                            definition_index=definition_index,
+                        )
+                    )
+                    is not None
                 }
                 if not suffixes:
                     violations.append(

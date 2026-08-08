@@ -7,8 +7,8 @@ from specx.testing.architecture.context import (
     EFFECT_SERVICE_FORBIDDEN_IMPORT_ROOTS,
     ArchitectureContext,
     annotation_name,
-    class_base_name_index,
-    class_has_foundation_base,
+    class_definition_base_index,
+    class_has_foundation_base_at,
     class_injected_unit_of_work_manager_field_names,
     module_has_forbidden_parts,
 )
@@ -31,7 +31,7 @@ class EffectServicesDoNotOwnTransactionsOrImportDeliveryRule(ArchitectureRuleBas
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.core_service_paths():
             tree = context.tree(path)
             aliases = context.aliases(path)
@@ -39,7 +39,13 @@ class EffectServicesDoNotOwnTransactionsOrImportDeliveryRule(ArchitectureRuleBas
                 node
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ClassDef)
-                and class_has_foundation_base(node.name, "BaseEffectService", base_index)
+                and class_has_foundation_base_at(
+                    node,
+                    "BaseEffectService",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                )
             ]
             if not effect_services:
                 continue

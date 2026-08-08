@@ -4,9 +4,9 @@ import ast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_base_name_index,
+    class_definition_base_index,
     class_direct_base_names,
-    class_has_foundation_base,
+    class_has_foundation_base_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -27,7 +27,7 @@ class GatewayPortsAndImplementationsLiveInExpectedPackagesRule(ArchitectureRuleB
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.core_paths():
             relative_parts = path.relative_to(context.src_root / "core").parts
             if len(relative_parts) < 2:
@@ -38,7 +38,13 @@ class GatewayPortsAndImplementationsLiveInExpectedPackagesRule(ArchitectureRuleB
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
                     continue
-                if not class_has_foundation_base(node.name, "BaseGateway", base_index):
+                if not class_has_foundation_base_at(
+                    node,
+                    "BaseGateway",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                ):
                     continue
                 direct_bases = class_direct_base_names(node, aliases)
                 if "BaseGateway" in direct_bases and inner_package != "gateways":

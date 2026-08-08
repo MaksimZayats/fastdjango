@@ -5,8 +5,8 @@ import ast
 from specx.testing.architecture.context import (
     CAPABILITY_FORBIDDEN_NAME_SUFFIXES,
     ArchitectureContext,
-    class_base_name_index,
-    class_has_foundation_base,
+    class_definition_base_index,
+    class_has_foundation_base_at,
     class_unit_of_work_field_names,
     context_self_fields,
 )
@@ -29,14 +29,20 @@ class CapabilitiesDoNotOwnWorkflowsOrOtherPortRolesRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.source_paths():
             if "foundation" in path.relative_to(context.src_root).parts:
                 continue
             tree = context.tree(path)
             aliases = context.aliases(path)
             for class_node in [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]:
-                if not class_has_foundation_base(class_node.name, "BaseCapability", base_index):
+                if not class_has_foundation_base_at(
+                    class_node,
+                    "BaseCapability",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                ):
                     continue
                 role_name = class_node.name.removesuffix("Capability")
                 forbidden_suffix = next(
@@ -57,7 +63,13 @@ class CapabilitiesDoNotOwnWorkflowsOrOtherPortRolesRule(ArchitectureRuleBase):
                         )
                     )
                 for incompatible_base in ("BaseRepository", "BaseGateway", "BaseUseCase"):
-                    if class_has_foundation_base(class_node.name, incompatible_base, base_index):
+                    if class_has_foundation_base_at(
+                        class_node,
+                        incompatible_base,
+                        source_path=path,
+                        context=context,
+                        definition_index=definition_index,
+                    ):
                         violations.append(
                             violation(
                                 self.id,

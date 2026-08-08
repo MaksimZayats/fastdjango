@@ -5,7 +5,7 @@ from pathlib import Path
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_base_name_index,
+    class_definition_base_index,
     uses_diwire_container,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
@@ -31,7 +31,7 @@ class OnlyIOCDeliveryAppAndTestsImportContainerRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.source_paths():
             if not uses_diwire_container(context.tree(path)):
                 continue
@@ -58,7 +58,9 @@ class OnlyIOCDeliveryAppAndTestsImportContainerRule(ArchitectureRuleBase):
                 ) and not class_can_inject_container(
                     relative,
                     class_node,
-                    base_index,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
                 ):
                     violations.append(
                         violation(

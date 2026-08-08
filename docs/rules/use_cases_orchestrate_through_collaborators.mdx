@@ -35,7 +35,9 @@ class PlaceOrderUseCase(BaseUseCase):
 
 ### Detection notes
 
-Resolves lexical aliases and shadowing. Statically indexed project classes, built-in types and
-exceptions, inherited injected collaborator calls, manager-owned UoW calls, and exact configured
-names pass. Unverifiable external constructors can be approved by exact qualified name; uppercase
-helper functions do not pass merely because of capitalization. Dynamic dispatch is not inferred.
+Resolves lexical aliases and shadowing. Statically indexed project classes, deterministic built-in
+and standard-library value constructors, typed injected collaborator calls, manager-owned UoW calls,
+and exact configured names pass. An injected plain `Callable` is still a function, not an
+architectural collaborator. Unverifiable external constructors can be approved by exact qualified
+name; uppercase helper functions do not pass merely because of capitalization. Dynamic dispatch is
+not inferred.

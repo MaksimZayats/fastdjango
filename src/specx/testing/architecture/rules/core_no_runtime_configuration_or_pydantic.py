@@ -45,6 +45,19 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
                 definition_index=definition_index,
             )
         }
+        project_pydantic_names = {
+            qualified_class_name(node, source_path=path, context=context)
+            for path in context.source_paths()
+            for node in ast.walk(context.tree(path))
+            if isinstance(node, ast.ClassDef)
+            and class_has_foundation_base_at(
+                node,
+                "BaseModel",
+                source_path=path,
+                context=context,
+                definition_index=definition_index,
+            )
+        }
         for path in sorted(context.ast_project.files):
             if not path.is_relative_to(core_root):
                 continue
@@ -63,6 +76,16 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
                     or context.qualified_name(path, annotation).endswith(".BaseRuntimeSettings")
                 }
             )
+            bad_pydantic_references = sorted(
+                project_pydantic_names
+                & (
+                    {
+                        context.qualified_name(path, annotation)
+                        for annotation in _annotation_expressions(tree)
+                    }
+                    | _imported_symbol_names(tree, path=path, context=context)
+                )
+            )
             if bad_imports:
                 findings.append(
                     violation(
@@ -78,6 +101,17 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
                         path=path,
                         message=(
                             f"core depends on runtime settings types: {bad_settings_references}"
+                        ),
+                    )
+                )
+            if bad_pydantic_references:
+                findings.append(
+                    violation(
+                        self.id,
+                        path=path,
+                        message=(
+                            "core depends on project Pydantic model types: "
+                            f"{bad_pydantic_references}"
                         ),
                     )
                 )
@@ -137,6 +171,24 @@ def _annotation_expressions(tree: ast.Module) -> tuple[ast.expr, ...]:
         elif isinstance(node, ast.ClassDef):
             expressions.extend(node.bases)
     return tuple(expressions)
+
+
+def _imported_symbol_names(
+    tree: ast.Module,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> set[str]:
+    return {
+        context.qualified_name(
+            path,
+            ast.Name(id=alias.asname or alias.name, ctx=ast.Load()),
+        )
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name != "*"
+    }
 
 
 def _behavior_method_node_ids(

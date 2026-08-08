@@ -11,6 +11,7 @@ SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
 REFERENCE_PATH_PATTERN = re.compile(r"`(references/[A-Za-z0-9_./-]+)`")
 MAX_SKILL_LINES = 500
 LONG_REFERENCE_LINES = 100
+CANONICAL_SKILL_NAMES = frozenset({"specx"})
 
 
 def main() -> int:
@@ -22,9 +23,12 @@ def main() -> int:
         return _finish(failures=failures)
 
     skill_dirs = sorted(path for path in root.iterdir() if path.is_dir())
-    if not skill_dirs:
-        failures.append(f"{root}: no skill directories found")
-        return _finish(failures=failures)
+    skill_names = {path.name for path in skill_dirs}
+    if skill_names != CANONICAL_SKILL_NAMES:
+        failures.append(
+            f"{root}: canonical skill directories must be {sorted(CANONICAL_SKILL_NAMES)}; "
+            f"found {sorted(skill_names)}"
+        )
 
     for skill_dir in skill_dirs:
         failures.extend(_validate_skill(skill_dir=skill_dir))

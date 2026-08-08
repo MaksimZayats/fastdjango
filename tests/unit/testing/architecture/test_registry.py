@@ -4,6 +4,7 @@ import importlib
 import inspect
 import pkgutil
 from inspect import getdoc
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -72,6 +73,18 @@ def test_rule_package_has_exactly_one_registered_rule_per_module() -> None:
         discovered_rules.extend(module_rules)
 
     assert set(discovered_rules) == set(BUILT_IN_RULES)
+
+
+def test_rules_do_not_use_lossy_simple_name_inheritance_index() -> None:
+    package = importlib.import_module("specx.testing.architecture.rules")
+    package_root = Path(next(iter(package.__path__)))
+    offenders = [
+        path.name
+        for path in package_root.glob("*.py")
+        if "class_base_name_index" in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []
 
 
 def test_every_builtin_rule_has_selection_metadata() -> None:

@@ -6,11 +6,13 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     class_definition_base_index,
     class_has_foundation_base_at,
+    class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._call_analysis import (
     ambient_environment_nodes,
+    ambient_runtime_value_nodes,
     is_ambient_runtime_call,
     resolved_call_name,
 )
@@ -42,6 +44,11 @@ class CoreBehaviorNoAmbientRuntimeAccessRule(ArchitectureRuleBase):
                 node
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ClassDef)
+                and not class_is_statically_abstract_at(
+                    node,
+                    source_path=path,
+                    context=context,
+                )
                 and (
                     class_has_foundation_base_at(
                         node,
@@ -101,6 +108,20 @@ class CoreBehaviorNoAmbientRuntimeAccessRule(ArchitectureRuleBase):
                                     symbol=class_node.name,
                                     node=node,
                                     message="direct environment-state access 'os.environ'",
+                                )
+                            )
+                    for node in ambient_runtime_value_nodes(tree, path=path, context=context):
+                        if any(node is descendant for descendant in ast.walk(function)):
+                            findings.append(
+                                violation(
+                                    self.id,
+                                    path=path,
+                                    symbol=class_node.name,
+                                    node=node,
+                                    message=(
+                                        "direct ambient runtime value "
+                                        f"{context.qualified_name(path, node)!r}"
+                                    ),
                                 )
                             )
         return tuple(findings)

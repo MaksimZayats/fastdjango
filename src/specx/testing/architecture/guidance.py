@@ -59,7 +59,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "use-cases.orchestrate-through-collaborators": _guidance(
         "Move behavior behind an injected collaborator, construct a project type, or approve an exact qualified function.",
-        "Resolves static lexical imports, project constructors, inherited injected fields, and manager-owned UoWs; dynamic dispatch is not inferred.",
+        "Resolves static lexical aliases, project constructors, typed collaborator fields, and manager-owned UoWs; injected plain callables and dynamic dispatch are not collaborators.",
     ),
     "core.behavior-no-ambient-runtime-access": _guidance(
         "Inject a capability or gateway for time, randomness, IDs, environment, filesystem, process, or network access.",
@@ -71,7 +71,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "core.no-runtime-configuration-or-pydantic": _guidance(
         "Move runtime settings and Pydantic models to an edge and pass typed values or collaborators into core.",
-        "Scans every core Python module for static imports, project runtime-settings annotations, and direct environment access.",
+        "Scans every core Python module for direct and project-wrapped Pydantic types, runtime-settings annotations, and direct environment access.",
     ),
     "use-cases.commands-and-queries-live-local": _guidance(
         "Move the command or query class into the use-case module that consumes it.",
@@ -170,8 +170,8 @@ BUILTIN_RULE_GUIDANCE = {
         "Activates for concrete SQLAlchemy models and validates prescribed files, semantic markers, revisions, and Make recipes.",
     ),
     "delivery.foundation-classes-live-under-delivery": _guidance(
-        "Move each concrete controller, delivery service, schema, or lifecycle under top-level delivery/.",
-        "Follows path-qualified delivery foundation inheritance and exempts only statically abstract project bases.",
+        "Move every controller, delivery service, schema, or lifecycle under top-level delivery/.",
+        "Follows path-qualified delivery foundation inheritance for concrete and abstract project classes.",
     ),
     "agents-md.documents-project-commands": _guidance(
         "Document the real source path and executable project commands, including JSON architecture diagnostics.",
@@ -186,8 +186,8 @@ BUILTIN_RULE_GUIDANCE = {
         "Maps known project source categories to test paths and checks discovered Python test files.",
     ),
     "tests.core-behavior-resolves-from-container": _guidance(
-        "In the mirrored unit module, accept container and resolve every exact concrete behavior class.",
-        "Follows path-qualified behavior inheritance, skips static abstract classes, and matches exact imported target symbols.",
+        "Use the native tests/unit/conftest.py container fixture and resolve every exact concrete behavior class in the mirrored test body.",
+        "Validates fixture provenance, excludes nested scopes and parametrized shadows, skips inherited abstract classes, and matches exact imported target symbols.",
     ),
     "tests.fixtures-do-not-bundle-mocks": _guidance(
         "Keep one-off mocks in the test and replace grouped mock fixtures with focused fixtures or mirrored fakes.",

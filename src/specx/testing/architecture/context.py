@@ -215,7 +215,7 @@ class ArchitectureContext:
                 continue
             for target in current_targets:
                 recipes[target].append(line)
-        return {target: "\n".join(lines).strip() for target, lines in recipes.items()}
+        return {target: "\n".join(lines).rstrip() for target, lines in recipes.items()}
 
     def qualified_name(self, path: Path, expression: ast.expr | None) -> str:
         """Resolve an imported alias or lexically local symbol to a qualified name."""
@@ -633,6 +633,86 @@ def class_has_foundation_base_at(
     )
 
 
+def nearest_foundation_base_names_for_class_at(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> set[str]:
+    """Return the nearest recognized foundation bases for one exact class."""
+
+    return _nearest_foundation_base_names_from_path(
+        node.name,
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+        visited=set(),
+    )
+
+
+def category_suffix_from_base_at(
+    base: str,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> str | None:
+    """Return a category suffix using path-qualified capability ancestry."""
+
+    leaf = base.rsplit(".", maxsplit=1)[-1]
+    if leaf == "BaseCapability":
+        return "Capability"
+    if leaf.startswith("Base") and class_has_foundation_base_from_path(
+        base,
+        "BaseCapability",
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+    ):
+        return leaf.removeprefix("Base")
+    return class_suffix_from_base(leaf)
+
+
+def _nearest_foundation_base_names_from_path(
+    class_name: str,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+    visited: set[tuple[Path, str]],
+) -> set[str]:
+    nearest: set[str] = set()
+    for candidate_path, base_names in _class_definition_candidates(
+        class_name,
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+    ):
+        visit_key = (candidate_path, class_name)
+        if visit_key in visited:
+            continue
+        direct = {
+            found_base
+            for found_base in base_names
+            if class_suffix_from_base(found_base.rsplit(".", maxsplit=1)[-1]) is not None
+        }
+        if direct:
+            nearest.update(direct)
+            continue
+        for found_base in base_names:
+            nearest.update(
+                _nearest_foundation_base_names_from_path(
+                    found_base,
+                    source_path=candidate_path,
+                    context=context,
+                    definition_index=definition_index,
+                    visited={*visited, visit_key},
+                )
+            )
+    return nearest
+
+
 def qualified_class_name(
     node: ast.ClassDef,
     *,
@@ -655,33 +735,101 @@ def project_class_qualified_names(context: ArchitectureContext) -> frozenset[str
     )
 
 
-def class_is_statically_abstract(node: ast.ClassDef, aliases: dict[str, str]) -> bool:
-    """Recognize project base classes that cannot be resolved as concrete targets."""
+def class_is_statically_abstract_at(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    """Recognize abstract project classes using path-qualified ancestry."""
 
-    if node.name.startswith("Base"):
-        return True
-    if any(
-        base_name(base, aliases).rsplit(".", maxsplit=1)[-1] in {"ABC", "Protocol"}
-        for base in node.bases
+    relative_parts = source_path.relative_to(context.src_root).parts
+    if (
+        "foundation" in relative_parts
+        and len(node.name) > 4
+        and node.name.startswith("Base")
+        and node.name[4].isupper()
     ):
         return True
+    aliases = context.aliases(source_path)
+    if _declares_explicit_abstract_class(node, aliases):
+        return True
+
+    definitions = {
+        qualified_class_name(candidate, source_path=path, context=context): (path, candidate)
+        for path in context.source_paths()
+        for candidate in context.tree(path).body
+        if isinstance(candidate, ast.ClassDef)
+    }
+    return bool(
+        _unimplemented_abstract_methods(
+            node,
+            source_path=source_path,
+            context=context,
+            definitions=definitions,
+            visited=set(),
+        )
+    )
+
+
+def _declares_explicit_abstract_class(
+    node: ast.ClassDef,
+    aliases: dict[str, str],
+) -> bool:
+    if any(
+        base_name(base, aliases).rsplit(".", maxsplit=1)[-1] == "Protocol" for base in node.bases
+    ):
+        return True
+    return any(
+        isinstance(child, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "__abstract__"
+            for target in (child.targets if isinstance(child, ast.Assign) else [child.target])
+        )
+        and isinstance(child.value, ast.Constant)
+        and child.value.value is True
+        for child in node.body
+    )
+
+
+def _unimplemented_abstract_methods(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definitions: dict[str, tuple[Path, ast.ClassDef]],
+    visited: set[str],
+) -> set[str]:
+    qualified = qualified_class_name(node, source_path=source_path, context=context)
+    if qualified in visited:
+        return set()
+    required: set[str] = set()
+    for base in node.bases:
+        candidate = definitions.get(context.qualified_name(source_path, base))
+        if candidate is not None:
+            base_path, base_node = candidate
+            required.update(
+                _unimplemented_abstract_methods(
+                    base_node,
+                    source_path=base_path,
+                    context=context,
+                    definitions=definitions,
+                    visited={*visited, qualified},
+                )
+            )
+    aliases = context.aliases(source_path)
     for child in node.body:
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        is_abstract = any(
             annotation_name(decorator, aliases).rsplit(".", maxsplit=1)[-1] == "abstractmethod"
             for decorator in child.decorator_list
-        ):
-            return True
-        if (
-            isinstance(child, (ast.Assign, ast.AnnAssign))
-            and any(
-                isinstance(target, ast.Name) and target.id == "__abstract__"
-                for target in (child.targets if isinstance(child, ast.Assign) else [child.target])
-            )
-            and isinstance(child.value, ast.Constant)
-            and child.value.value is True
-        ):
-            return True
-    return False
+        )
+        if is_abstract:
+            required.add(child.name)
+        else:
+            required.discard(child.name)
+    return required
 
 
 def class_has_foundation_base_from_path(
@@ -761,13 +909,21 @@ def qualified_symbol_bindings(
         _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
     )
     bindings: dict[str, str] = {}
-    for node in context.tree(path).body:
-        _update_import_bindings(node, bindings, module_name=module_name)
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            bindings[node.name] = f"{module_name}.{node.name}" if module_name else node.name
+    for node in _lexical_scope_nodes(context.tree(path)):
+        _update_lexical_binding(
+            node,
+            bindings,
+            module_name=module_name,
+            local_scope=False,
+        )
     if at_node is not None:
         for scope in _containing_function_scopes(context.tree(path), at_node):
-            _update_function_scope_bindings(scope, bindings, module_name=module_name)
+            _update_function_scope_bindings(
+                scope,
+                bindings,
+                module_name=module_name,
+                at_node=at_node,
+            )
     return bindings
 
 
@@ -797,6 +953,7 @@ def _update_function_scope_bindings(
     bindings: dict[str, str],
     *,
     module_name: str,
+    at_node: ast.AST,
 ) -> None:
     arguments = (
         *function.args.posonlyargs,
@@ -804,27 +961,38 @@ def _update_function_scope_bindings(
         *function.args.kwonlyargs,
     )
     for argument in arguments:
-        bindings[argument.arg] = f"<local>.{argument.arg}"
+        bindings[argument.arg] = (
+            argument.arg if argument.arg in {"self", "cls"} else f"<local>.{argument.arg}"
+        )
     if function.args.vararg is not None:
         bindings[function.args.vararg.arg] = f"<local>.{function.args.vararg.arg}"
     if function.args.kwarg is not None:
         bindings[function.args.kwarg.arg] = f"<local>.{function.args.kwarg.arg}"
 
-    for node in _function_scope_nodes(function):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            _update_import_bindings(node, bindings, module_name=module_name)
+    target_position = _node_position(at_node)
+    for node in _lexical_scope_nodes(function):
+        node_position = _node_position(node)
+        if (
+            target_position is not None
+            and node_position is not None
+            and node_position >= target_position
+        ):
             continue
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            bindings[node.id] = f"<local>.{node.id}"
+        _update_lexical_binding(
+            node,
+            bindings,
+            module_name=module_name,
+            local_scope=True,
+        )
 
 
-def _function_scope_nodes(
-    function: ast.FunctionDef | ast.AsyncFunctionDef,
+def _lexical_scope_nodes(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[ast.AST, ...]:
     nodes: list[ast.AST] = []
 
     def visit(node: ast.AST) -> None:
-        if node is not function and isinstance(
+        if node is not scope and isinstance(
             node,
             (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
         ):
@@ -835,8 +1003,65 @@ def _function_scope_nodes(
         for child in ast.iter_child_nodes(node):
             visit(child)
 
-    visit(function)
-    return tuple(nodes)
+    visit(scope)
+    return tuple(
+        sorted(
+            nodes,
+            key=lambda node: _node_position(node) or (-1, -1),
+        )
+    )
+
+
+def _node_position(node: ast.AST) -> tuple[int, int] | None:
+    line = getattr(node, "lineno", None)
+    column = getattr(node, "col_offset", None)
+    return (line, column) if isinstance(line, int) and isinstance(column, int) else None
+
+
+def _update_lexical_binding(
+    node: ast.AST,
+    bindings: dict[str, str],
+    *,
+    module_name: str,
+    local_scope: bool,
+) -> None:
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        _update_import_bindings(node, bindings, module_name=module_name)
+        return
+    if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        bindings[node.name] = (
+            f"<local-class>.{node.name}"
+            if local_scope and isinstance(node, ast.ClassDef)
+            else f"<local>.{node.name}"
+            if local_scope
+            else f"{module_name}.{node.name}"
+            if module_name
+            else node.name
+        )
+        return
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+        targets: tuple[ast.expr, ...]
+        value: ast.expr | None
+        if isinstance(node, ast.Assign):
+            targets = tuple(node.targets)
+            value = node.value
+        else:
+            targets = (node.target,)
+            value = node.value
+        resolved_value = _resolve_expression_with_bindings(value, bindings)
+        for target in targets:
+            if isinstance(target, ast.Name):
+                bindings[target.id] = resolved_value or f"<local>.{target.id}"
+
+
+def _resolve_expression_with_bindings(
+    expression: ast.expr | None,
+    bindings: dict[str, str],
+) -> str | None:
+    chain = attribute_chain(expression)
+    if not chain:
+        return None
+    return ".".join((bindings.get(chain[0], chain[0]), *chain[1:]))
 
 
 def _index_class_definitions(
@@ -1022,6 +1247,32 @@ def class_injected_repository_field_names(
             injected_name,
             "BaseRepository",
             class_base_name_index,
+        ):
+            fields.add(child.target.id)
+    return fields
+
+
+def class_injected_repository_field_names_at(
+    class_node: ast.ClassDef,
+    aliases: dict[str, str],
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> set[str]:
+    """Return repository fields without conflating same-named project classes."""
+
+    fields: set[str] = set()
+    for child in class_node.body:
+        if not isinstance(child, ast.AnnAssign) or not isinstance(child.target, ast.Name):
+            continue
+        injected_name = injected_type_name(child.annotation, aliases)
+        if injected_name.endswith("Repository") or class_has_foundation_base_from_path(
+            injected_name,
+            "BaseRepository",
+            source_path=source_path,
+            context=context,
+            definition_index=definition_index,
         ):
             fields.add(child.target.id)
     return fields

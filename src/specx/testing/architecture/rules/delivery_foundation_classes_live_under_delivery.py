@@ -6,7 +6,6 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     class_definition_base_index,
     class_has_foundation_base_at,
-    class_is_statically_abstract,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -14,7 +13,7 @@ from specx.testing.architecture.rules._shared import ArchitectureRuleBase, viola
 
 
 class DeliveryFoundationClassesLiveUnderDeliveryRule(ArchitectureRuleBase):
-    """Place concrete delivery foundation subclasses under the top-level delivery package."""
+    """Place delivery foundation subclasses under the top-level delivery package."""
 
     id: SpecxRuleId = SpecxRuleId.DELIVERY_FOUNDATION_CLASSES_LIVE_UNDER_DELIVERY
     remediation: str | None = (
@@ -30,9 +29,7 @@ class DeliveryFoundationClassesLiveUnderDeliveryRule(ArchitectureRuleBase):
             if relative.parts[:1] == ("delivery",):
                 continue
             for node in ast.walk(context.tree(path)):
-                if not isinstance(node, ast.ClassDef) or class_is_statically_abstract(
-                    node, context.aliases(path)
-                ):
+                if not isinstance(node, ast.ClassDef):
                     continue
                 if any(
                     class_has_foundation_base_at(

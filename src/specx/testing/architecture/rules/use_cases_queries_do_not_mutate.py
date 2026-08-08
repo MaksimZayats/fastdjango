@@ -9,10 +9,9 @@ from specx.testing.architecture.context import (
     annotation_name,
     call_is_rooted_in_names,
     call_is_rooted_in_self_attributes,
-    class_base_name_index,
     class_definition_base_index,
     class_has_foundation_base_from_path,
-    class_injected_repository_field_names,
+    class_injected_repository_field_names_at,
     execute_methods_with_classes,
     repository_mutator_method_names,
 )
@@ -36,7 +35,6 @@ class QueryUseCasesDoNotCallRepositoryMutatorsRule(ArchitectureRuleBase):
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         mutator_names = repository_mutator_method_names(context)
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
         definition_index = class_definition_base_index(context)
         for path in (context.src_root / "core").glob("*/use_cases/**/*.py"):
             if path.name == "__init__.py" or path not in context.ast_project.files:
@@ -55,10 +53,12 @@ class QueryUseCasesDoNotCallRepositoryMutatorsRule(ArchitectureRuleBase):
                     definition_index=definition_index,
                 ):
                     continue
-                repository_fields = class_injected_repository_field_names(
+                repository_fields = class_injected_repository_field_names_at(
                     class_node,
                     aliases,
-                    base_index,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
                 )
                 repository_roots = active_uow_names(execute) | active_repository_names(
                     execute,
