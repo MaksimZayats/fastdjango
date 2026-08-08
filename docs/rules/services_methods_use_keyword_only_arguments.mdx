@@ -36,9 +36,10 @@ class PriceService(BasePureService):
 
 Checks effective public methods on direct and inherited project pure, read, and effect service
 subclasses, including methods declared under class control flow and module-level project functions
-attached directly or through exact `staticmethod` and `classmethod` wrappers. Every reachable overload
-and runtime implementation is checked. Only the actual instance/class receiver is exempt; static methods
-have no implicit receiver. Ordinary positional parameters and `*args` violate the keyword-only contract.
+attached directly or through exact `staticmethod` and `classmethod` wrappers, plus inline lambdas
+attached through those wrappers. Every reachable overload and runtime implementation is checked. Only
+the actual instance/class receiver is exempt; static methods have no implicit receiver. Ordinary
+positional parameters and `*args` violate the keyword-only contract.
 Property getter, setter, and deleter functions are descriptor accessors rather than directly called
 service methods, so their runtime-mandated accessor parameters are exempt, including qualified accessor
 overrides inherited from an explicitly selected project base or mixin. Abstractness is aggregated over

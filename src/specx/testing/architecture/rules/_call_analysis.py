@@ -940,25 +940,34 @@ def _class_statement_method_groups(
             path=path,
             context=context,
         )
-        qualified = context.qualified_name(path, attached_expression)
-        attached = project_functions.get(qualified)
+        attached_declarations: tuple[ClassMethodDeclaration, ...]
+        if isinstance(value, ast.Call) and isinstance(attached_expression, ast.Lambda):
+            attached_declarations = (
+                ClassMethodDeclaration(
+                    path=path,
+                    function=_lambda_as_function(
+                        attached_expression,
+                        name="<attached-lambda>",
+                    ),
+                    binding=binding,
+                ),
+            )
+        else:
+            qualified = context.qualified_name(path, attached_expression)
+            attached_declarations = tuple(
+                ClassMethodDeclaration(
+                    path=function_path,
+                    function=function,
+                    binding=binding,
+                )
+                for function_path, function in project_functions.get(qualified, ())
+            )
         for target in targets:
             if not isinstance(target, ast.Name):
                 continue
             target_declarations = property_declarations
             if target_declarations is None:
-                target_declarations = (
-                    tuple(
-                        ClassMethodDeclaration(
-                            path=function_path,
-                            function=function,
-                            binding=binding,
-                        )
-                        for function_path, function in attached
-                    )
-                    if attached is not None
-                    else ()
-                )
+                target_declarations = attached_declarations
             current[target.id] = ClassMethodGroup(
                 declarations=target_declarations,
                 always_bound=True,
@@ -1217,7 +1226,10 @@ def _property_constructor_declarations(
             declarations.append(
                 ClassMethodDeclaration(
                     path=path,
-                    function=_lambda_as_function(expression, component=component),
+                    function=_lambda_as_function(
+                        expression,
+                        name=f"<property-{component}>",
+                    ),
                     binding="instance",
                     descriptor_component=component,
                 )
@@ -1239,11 +1251,11 @@ def _property_constructor_declarations(
 def _lambda_as_function(
     expression: ast.Lambda,
     *,
-    component: DescriptorComponent,
+    name: str,
 ) -> ast.FunctionDef:
     returned = ast.copy_location(ast.Return(value=expression.body), expression.body)
     function = ast.FunctionDef(
-        name=f"<property-{component}>",
+        name=name,
         args=expression.args,
         body=[returned],
         decorator_list=[],

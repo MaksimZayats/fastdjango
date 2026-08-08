@@ -44,9 +44,10 @@ count. Reachable module-import calls to `pytest.skip()`, `pytest.xfail()`, or
 `pytest.importorskip()` invalidate the module's evidence, including calls executed in class bodies,
 function decorators and defaults, and lambda defaults. Unknown boolean and conditional-expression
 branches retain every reachable outcome, while statically dead and short-circuited calls do not.
-Deferred function and lambda bodies are not executed during import. An `except Exception` handler
-does not catch pytest outcome termination; a bare handler or one that explicitly catches
-`BaseException` does. Class-scoped container fixtures shadow only tests in their owning class
-hierarchy, while module fixtures shadow the whole module. Conditional xfail marks known statically
-false, reachable conditional expressions, and handlers that re-raise remain valid evidence. Classes
-that retain inherited abstract methods are not resolution targets.
+The outermost iterable of a comprehension executes immediately; its body, filters, and inner
+iterables remain deferred. Deferred function and lambda bodies are not executed during import. An
+`except Exception` handler does not catch pytest outcome termination; a bare handler or one that
+explicitly catches `BaseException` does. Class-scoped container fixtures shadow only tests in their
+owning class hierarchy, while module fixtures shadow the whole module. Conditional xfail marks known
+statically false, reachable conditional expressions, and handlers that re-raise remain valid
+evidence. Classes that retain inherited abstract methods are not resolution targets.

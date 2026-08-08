@@ -332,6 +332,9 @@ def _module_import_nodes(tree: ast.Module) -> tuple[ast.AST, ...]:
                 ast.GeneratorExp,
             ),
         ):
+            nodes.append(node)
+            if node.generators:
+                visit(node.generators[0].iter)
             return
         nodes.append(node)
         for child in ast.iter_child_nodes(node):

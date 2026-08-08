@@ -47,8 +47,9 @@ clocks, and OS-derived UUID/node identifiers are included. Local-time conversion
 timezone remain deterministic. Walrus aliases and ambient callable parameter defaults participate in
 reaching-flow analysis: a definite reassignment removes the default's provenance, while a conditional
 reassignment remains conservative. Effective methods follow Python C3 inheritance, including
-class-control-flow, exact descriptor-attached methods, and the effective getter, setter, and deleter
-components of properties. A fresh property shadows the inherited descriptor, while a qualified
+class-control-flow, project functions and inline lambdas attached through exact `staticmethod` or
+`classmethod` wrappers, and the effective getter, setter, and deleter components of properties. A fresh
+property shadows the inherited descriptor, while a qualified
 `@Base.property.getter`, `setter`, or `deleter` override replaces only that component and preserves
 components from the explicitly selected owner, including a non-first C3 mixin. A property remains
 abstract when any effective accessor is abstract; concrete component overrides update that status.

@@ -427,6 +427,56 @@ def test_conditionally_reachable_expression_outcome_disables_container_evidence(
 
 
 @pytest.mark.parametrize(
+    "comprehension",
+    [
+        "[item for item in pytest.importorskip('optional_dependency').items]\n",
+        "(item for item in pytest.importorskip('optional_dependency').items)\n",
+    ],
+)
+def test_comprehension_outer_iterable_outcome_disables_container_evidence(
+    tmp_path: Path,
+    comprehension: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\n{comprehension}\n{_test_source()}",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    "comprehension",
+    [
+        "[pytest.skip('disabled', allow_module_level=True) for _ in ()]\n",
+        "(pytest.xfail('disabled') for _ in ())\n",
+        "[item for item in () if pytest.importorskip('optional_dependency')]\n",
+        "[inner for outer in () for inner in pytest.importorskip('optional_dependency').items]\n",
+    ],
+)
+def test_deferred_comprehension_outcome_preserves_container_evidence(
+    tmp_path: Path,
+    comprehension: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\n{comprehension}\n{_test_source()}",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+@pytest.mark.parametrize(
     "class_body",
     [
         "    pytest.skip('disabled', allow_module_level=True)\n",

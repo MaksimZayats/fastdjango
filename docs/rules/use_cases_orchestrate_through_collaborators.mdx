@@ -42,9 +42,10 @@ exact configured names pass. Project package re-exports and legacy or PEP 695 in
 resolved, including quoted `Injected[...]` field annotations. Effective C3 field overrides and field
 reassignment remove injected-field trust. Methods declared under module or class control flow,
 lexically nested foundation subclasses, exact `staticmethod`/`classmethod` attachments of project
-functions, property getter/setter/deleter components, and the runtime implementation behind an overload
-group are checked. Fresh properties shadow inherited descriptors; qualified inherited accessor
-overrides replace one component and retain the others from the explicitly selected property owner,
+functions or inline lambdas, property getter/setter/deleter components, and the runtime implementation
+behind an overload group are checked. Fresh properties shadow inherited descriptors; qualified
+inherited accessor overrides replace one component and retain the others from the explicitly selected
+property owner,
 including a non-first C3 mixin. Property abstractness follows every effective accessor component.
 Exact `property(...)` assignments also check positional or keyword project-function accessors and inline
 lambda bodies as fresh descriptors. Class-body aliases of the three built-in wrappers are resolved in
