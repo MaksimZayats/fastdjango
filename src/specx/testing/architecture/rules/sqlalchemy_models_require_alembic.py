@@ -29,7 +29,7 @@ _DRIFT_EVIDENCE = frozenset(
         "alembic.command.check",
     }
 )
-_PYTEST_OUTCOME_CALLS = frozenset({"pytest.skip", "pytest.xfail"})
+_PYTEST_OUTCOME_CALLS = frozenset({"pytest.importorskip", "pytest.skip", "pytest.xfail"})
 _REVISION_EFFECT_METHODS = frozenset(
     {
         "add_column",
@@ -231,6 +231,8 @@ def _has_required_markers(name: str, text: str) -> bool:
             bindings=bindings,
         )
     bindings = _import_bindings(tree)
+    if not _module_import_can_complete(tree, bindings=bindings):
+        return False
     if _pytestmark_body_is_disabled(tree.body, bindings=bindings):
         return False
     for node in tree.body:
@@ -309,6 +311,42 @@ def _valid_revision(text: str) -> bool:
         and assigned_down_revision
         and {"upgrade", "downgrade"} <= functions.keys()
         and has_alembic_operation
+    )
+
+
+def _module_import_can_complete(
+    tree: ast.Module,
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    wrapper = ast.FunctionDef(
+        name="<module>",
+        args=ast.arguments(
+            posonlyargs=[],
+            args=[],
+            kwonlyargs=[],
+            kw_defaults=[],
+            defaults=[],
+        ),
+        body=tree.body,
+        decorator_list=[],
+    )
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    paths = _flow_block(
+        wrapper.body,
+        (_EvidencePath(frozenset()),),
+        scope=wrapper,
+        bindings=bindings,
+        functions=functions,
+        visited=frozenset({wrapper.name}),
+        batch_aliases=_batch_operation_aliases(wrapper, bindings=bindings),
+    )
+    return any(path.termination in {"next", "return"} for path in paths) and not any(
+        path.termination == "pytest-outcome" for path in paths
     )
 
 

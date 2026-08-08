@@ -18,6 +18,9 @@ from specx.testing.architecture.rules._shared import (
     violation,
 )
 
+_PYTEST_FUNCTION_OUTCOME_CALLS = frozenset({"pytest.skip", "pytest.xfail"})
+_PYTEST_MODULE_OUTCOME_CALLS = _PYTEST_FUNCTION_OUTCOME_CALLS | {"pytest.importorskip"}
+
 
 class TestsCoreBehaviorResolvesFromContainerRule(ArchitectureRuleBase):
     """Require mirrored core-behavior tests to resolve every concrete target from DIWire."""
@@ -119,6 +122,11 @@ def _target_resolved_by_container(
         path=test_path,
         context=context,
     )
+    module_import_completes = _module_import_can_complete(
+        tree,
+        path=test_path,
+        context=context,
+    )
     for function, owner_classes in _test_functions_with_owners(tree):
         arguments = (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)
         if (
@@ -127,6 +135,7 @@ def _target_resolved_by_container(
             or _container_is_parametrized(function)
             or module_disabled
             or module_container_shadowed
+            or not module_import_completes
             or _owner_defines_container_fixture(
                 owner_classes,
                 path=test_path,
@@ -145,7 +154,7 @@ def _target_resolved_by_container(
             id(node)
             for node in executable_nodes
             if isinstance(node, ast.Call)
-            and context.qualified_name(test_path, node.func) in {"pytest.skip", "pytest.xfail"}
+            and context.qualified_name(test_path, node.func) in _PYTEST_FUNCTION_OUTCOME_CALLS
         )
         awaited_call_ids = {
             id(node.value)
@@ -215,6 +224,51 @@ def _test_functions_with_owners(
 
     collect(tree.body, ())
     return tuple(found)
+
+
+def _module_import_can_complete(
+    tree: ast.Module,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    terminal_call_ids = frozenset(
+        id(node)
+        for node in _module_import_nodes(tree)
+        if isinstance(node, ast.Call)
+        and context.qualified_name(path, node.func) in _PYTEST_MODULE_OUTCOME_CALLS
+    )
+    return "pytest-outcome" not in _block_exit_kinds(
+        tree.body,
+        terminal_call_ids=terminal_call_ids,
+    )
+
+
+def _module_import_nodes(tree: ast.Module) -> tuple[ast.AST, ...]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.ClassDef,
+                ast.Lambda,
+                ast.ListComp,
+                ast.SetComp,
+                ast.DictComp,
+                ast.GeneratorExp,
+            ),
+        ):
+            return
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in tree.body:
+        visit(statement)
+    return tuple(nodes)
 
 
 def _node_is_reachable(

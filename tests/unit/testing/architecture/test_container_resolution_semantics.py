@@ -272,6 +272,80 @@ def test_module_and_class_pytestmark_disable_container_evidence(
     assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
 
 
+@pytest.mark.parametrize(
+    "module_outcome",
+    [
+        "import pytest\npytest.skip('disabled', allow_module_level=True)\n",
+        "from pytest import xfail as stop_module\nstop_module('disabled')\n",
+        "import pytest as pt\npt.importorskip('optional_dependency')\n",
+        "import pytest\n",
+    ],
+)
+def test_reachable_module_pytest_outcome_disables_container_evidence(
+    tmp_path: Path,
+    module_outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    test_source = _test_source()
+    source = (
+        f"{module_outcome}{test_source}pytest.xfail('disabled')\n"
+        if module_outcome == "import pytest\n"
+        else f"{module_outcome}{test_source}"
+    )
+    _write(_test_path(tmp_path), source)
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize(
+    "dead_outcome",
+    [
+        "if False:\n    pytest.skip('disabled', allow_module_level=True)\n",
+        "True or pytest.xfail('disabled')\n",
+        "False and pytest.importorskip('optional_dependency')\n",
+        "pytest.skip('disabled', allow_module_level=True) if False else None\n",
+    ],
+)
+def test_dead_module_pytest_outcome_preserves_container_evidence(
+    tmp_path: Path,
+    dead_outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\n{dead_outcome}{_test_source()}",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+def test_conditionally_reachable_module_pytest_outcome_disables_container_evidence(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "if optional_dependency_enabled:\n"
+        "    pytest.importorskip('optional_dependency')\n"
+        f"{_test_source()}",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
 def test_keyword_skipif_disables_container_evidence(tmp_path: Path) -> None:
     _write_project(tmp_path)
     _write_root_fixture(

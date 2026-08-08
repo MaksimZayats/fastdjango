@@ -12,8 +12,7 @@ from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._call_analysis import (
     MethodBinding,
-    class_hierarchy,
-    class_method_declarations,
+    effective_class_method_declarations,
 )
 from specx.testing.architecture.rules._shared import ArchitectureRuleBase, violation
 
@@ -46,42 +45,34 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
                     for base in service_bases
                 ):
                     continue
-                seen_methods: set[str] = set()
-                for method_path, method_owner in class_hierarchy(
+                for method_name, method_declaration in effective_class_method_declarations(
                     class_node,
                     path=path,
                     context=context,
                 ):
-                    for method_name, group in class_method_declarations(
-                        method_owner,
-                        path=method_path,
-                        context=context,
-                    ).items():
-                        if method_name.startswith("_") or method_name in seen_methods:
-                            continue
-                        if group.always_bound:
-                            seen_methods.add(method_name)
-                        for method_declaration in group.declarations:
-                            if method_declaration.descriptor_component is not None:
-                                continue
-                            declaration_key = (
-                                method_declaration.path,
-                                id(method_declaration.function),
-                                method_declaration.binding,
-                            )
-                            if declaration_key in checked_declarations:
-                                continue
-                            checked_declarations.add(declaration_key)
-                            findings.extend(
-                                _method_findings(
-                                    self.id,
-                                    path=method_declaration.path,
-                                    class_node=class_node,
-                                    method=method_declaration.function,
-                                    method_name=method_name,
-                                    binding=method_declaration.binding,
-                                )
-                            )
+                    if (
+                        method_name.startswith("_")
+                        or method_declaration.descriptor_component is not None
+                    ):
+                        continue
+                    declaration_key = (
+                        method_declaration.path,
+                        id(method_declaration.function),
+                        method_declaration.binding,
+                    )
+                    if declaration_key in checked_declarations:
+                        continue
+                    checked_declarations.add(declaration_key)
+                    findings.extend(
+                        _method_findings(
+                            self.id,
+                            path=method_declaration.path,
+                            class_node=class_node,
+                            method=method_declaration.function,
+                            method_name=method_name,
+                            binding=method_declaration.binding,
+                        )
+                    )
         return tuple(findings)
 
 

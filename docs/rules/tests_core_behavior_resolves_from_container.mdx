@@ -40,7 +40,9 @@ path-qualified concrete target needs a call in the executable test body; dead br
 parametrized/defaulted shadows, function/module/class-level skipped or unconditional xfailed tests,
 runtime `pytest.skip()` or `pytest.xfail()` termination, short-circuited expressions, swallowed
 failures, suppressed exceptions, patched resolve methods, and un-awaited `aresolve` calls do not
-count. An `except Exception` handler does not catch pytest outcome termination; a bare handler or one
+count. Reachable module-import calls to `pytest.skip()`, `pytest.xfail()`, or
+`pytest.importorskip()` invalidate the module's evidence; statically dead and short-circuited calls do
+not. An `except Exception` handler does not catch pytest outcome termination; a bare handler or one
 that explicitly catches `BaseException` does. Class-scoped container fixtures shadow only tests in
 their owning class hierarchy, while module fixtures shadow the whole module. Conditional xfail marks
 known statically false, reachable conditional expressions, and handlers that re-raise remain valid

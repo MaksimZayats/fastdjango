@@ -13,8 +13,7 @@ from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._call_analysis import (
     call_is_injected_collaborator_or_uow,
-    class_hierarchy,
-    class_method_declarations,
+    effective_class_method_declarations,
     function_behavior_nodes,
     is_ambient_runtime_call,
     is_statically_recognized_constructor,
@@ -58,31 +57,22 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
                     context=context,
                 ):
                     continue
-                seen_methods: set[str] = set()
-                for method_path, method_owner in class_hierarchy(
+                for method_name, declaration in effective_class_method_declarations(
                     class_node,
                     path=path,
                     context=context,
                 ):
-                    for method_name, group in class_method_declarations(
-                        method_owner,
-                        path=method_path,
-                        context=context,
-                    ).items():
-                        if method_name.startswith("__") or method_name in seen_methods:
-                            continue
-                        if group.always_bound:
-                            seen_methods.add(method_name)
-                        for declaration in group.declarations:
-                            findings.extend(
-                                self._check_method(
-                                    context,
-                                    path=declaration.path,
-                                    use_case_path=path,
-                                    use_case_class=class_node,
-                                    function=declaration.function,
-                                )
-                            )
+                    if method_name.startswith("__"):
+                        continue
+                    findings.extend(
+                        self._check_method(
+                            context,
+                            path=declaration.path,
+                            use_case_path=path,
+                            use_case_class=class_node,
+                            function=declaration.function,
+                        )
+                    )
         unique: dict[
             tuple[Path | None, int | None, int | None, str],
             SpecxArchitectureViolation,

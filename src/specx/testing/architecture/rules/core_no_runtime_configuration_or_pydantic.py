@@ -14,8 +14,7 @@ from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._call_analysis import (
     ambient_environment_nodes,
-    class_hierarchy,
-    class_method_declarations,
+    effective_class_method_declarations,
     function_behavior_nodes,
     reachable_behavior_functions,
     resolved_call_name,
@@ -441,24 +440,17 @@ def _behavior_method_node_ids(
                 for base in behavior_bases
             ):
                 continue
-            seen_methods: set[str] = set()
-            for owner_path, owner in class_hierarchy(node, path=path, context=context):
-                for method_name, group in class_method_declarations(
-                    owner,
-                    path=owner_path,
+            for _method_name, declaration in effective_class_method_declarations(
+                node,
+                path=path,
+                context=context,
+            ):
+                for _helper_path, helper in reachable_behavior_functions(
+                    declaration.function,
+                    path=declaration.path,
                     context=context,
-                ).items():
-                    if method_name in seen_methods:
-                        continue
-                    if group.always_bound:
-                        seen_methods.add(method_name)
-                    for declaration in group.declarations:
-                        for _helper_path, helper in reachable_behavior_functions(
-                            declaration.function,
-                            path=declaration.path,
-                            context=context,
-                        ):
-                            node_ids.update(
-                                id(descendant) for descendant in function_behavior_nodes(helper)
-                            )
+                ):
+                    node_ids.update(
+                        id(descendant) for descendant in function_behavior_nodes(helper)
+                    )
     return node_ids

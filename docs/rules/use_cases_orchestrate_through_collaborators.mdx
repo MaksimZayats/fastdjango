@@ -43,12 +43,14 @@ resolved, including quoted `Injected[...]` field annotations. Effective C3 field
 reassignment remove injected-field trust. Methods declared under module or class control flow,
 lexically nested foundation subclasses, exact `staticmethod`/`classmethod` attachments of project
 functions, property getter/setter/deleter components, and the runtime implementation behind an overload
-group are checked. Plain subclass
+group are checked. Fresh properties shadow inherited descriptors; qualified inherited accessor
+overrides replace one component and retain the others under C3. Plain subclass
 assignments that replace inherited injected fields remove collaborator trust. Calls in dormant nested
 function, class, and lambda bodies are not
 attributed to the enclosing use case; their definition-time expressions are. An injected plain
 `Callable`, including a project type alias or recursively wrapped `Annotated[Callable, ...]`, is still a
-function rather than an architectural collaborator. Quoted and imported aliases follow the same rule;
-`Annotated` around a non-callable collaborator remains valid. Unverifiable external constructors can be
-approved by exact qualified name; uppercase
+function rather than an architectural collaborator. `Optional`, `Union`, and PEP 604 union composites
+are callable when any viable member is callable. Quoted and imported aliases follow the same rule;
+composites containing only non-callable collaborators remain valid. Unverifiable external constructors
+can be approved by exact qualified name; uppercase
 helper functions do not pass merely because of capitalization. Dynamic dispatch is not inferred.

@@ -4,7 +4,7 @@ import ast
 import builtins
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
@@ -736,6 +736,8 @@ def _direct_nested_functions(
 
 MethodBinding = Literal["instance", "class", "static"]
 DescriptorComponent = Literal["getter", "setter", "deleter"]
+DescriptorBinding = Literal["fresh", "local", "inherited"]
+DESCRIPTOR_COMPONENTS: frozenset[DescriptorComponent] = frozenset({"getter", "setter", "deleter"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -750,6 +752,8 @@ class ClassMethodDeclaration:
 class ClassMethodGroup:
     declarations: tuple[ClassMethodDeclaration, ...]
     always_bound: bool
+    shadows_inherited_name: bool
+    overridden_descriptor_components: frozenset[DescriptorComponent]
 
 
 def class_method_declarations(
@@ -768,6 +772,39 @@ def class_method_declarations(
         context=context,
         project_functions=project_functions,
     )
+
+
+def effective_class_method_declarations(
+    class_node: ast.ClassDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[tuple[str, ClassMethodDeclaration], ...]:
+    """Return C3-effective method and property-accessor declaration candidates."""
+
+    effective: list[tuple[str, ClassMethodDeclaration]] = []
+    shadowed_names: set[str] = set()
+    shadowed_components: dict[str, set[DescriptorComponent]] = {}
+    for owner_path, owner in class_hierarchy(class_node, path=path, context=context):
+        for method_name, group in class_method_declarations(
+            owner,
+            path=owner_path,
+            context=context,
+        ).items():
+            if method_name in shadowed_names:
+                continue
+            components = shadowed_components.setdefault(method_name, set())
+            effective.extend(
+                (method_name, declaration)
+                for declaration in group.declarations
+                if declaration.descriptor_component is None
+                or declaration.descriptor_component not in components
+            )
+            if group.shadows_inherited_name:
+                shadowed_names.add(method_name)
+                continue
+            components.update(group.overridden_descriptor_components)
+    return tuple(effective)
 
 
 def _class_block_method_groups(
@@ -806,7 +843,7 @@ def _class_statement_method_groups(
 ) -> dict[str, ClassMethodGroup]:
     current = dict(state)
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        descriptor_component, updates_existing_descriptor = _function_descriptor_component(
+        descriptor_component, descriptor_binding = _function_descriptor_component(
             statement,
             path=path,
             context=context,
@@ -827,10 +864,23 @@ def _class_statement_method_groups(
                     if candidate.descriptor_component is not None
                     and candidate.descriptor_component != descriptor_component
                 )
-                if updates_existing_descriptor
+                if descriptor_binding != "fresh"
                 else ()
             )
             declarations = (*descriptor_declarations, declaration)
+            shadows_inherited_name = bool(
+                descriptor_binding == "fresh"
+                or (existing is not None and existing.shadows_inherited_name)
+            )
+            overridden_components: set[DescriptorComponent] = set(
+                existing.overridden_descriptor_components if existing else ()
+            )
+            overridden_components.add(descriptor_component)
+            overridden_descriptor_components = (
+                DESCRIPTOR_COMPONENTS
+                if shadows_inherited_name
+                else frozenset(overridden_components)
+            )
         elif _function_is_overload(statement, path=path, context=context) or (
             existing_declarations
             and all(
@@ -843,11 +893,17 @@ def _class_statement_method_groups(
             )
         ):
             declarations = (*existing_declarations, declaration)
+            shadows_inherited_name = True
+            overridden_descriptor_components = frozenset(DESCRIPTOR_COMPONENTS)
         else:
             declarations = (declaration,)
+            shadows_inherited_name = True
+            overridden_descriptor_components = frozenset(DESCRIPTOR_COMPONENTS)
         current[statement.name] = ClassMethodGroup(
             declarations=declarations,
             always_bound=True,
+            shadows_inherited_name=shadows_inherited_name,
+            overridden_descriptor_components=overridden_descriptor_components,
         )
         return current
     targets: tuple[ast.expr, ...] = ()
@@ -882,6 +938,8 @@ def _class_statement_method_groups(
             current[target.id] = ClassMethodGroup(
                 declarations=declarations,
                 always_bound=True,
+                shadows_inherited_name=True,
+                overridden_descriptor_components=frozenset(DESCRIPTOR_COMPONENTS),
             )
         return current
     if isinstance(statement, ast.If):
@@ -1030,8 +1088,13 @@ def _merge_class_method_states(
     for name in names:
         declarations: list[ClassMethodDeclaration] = []
         seen: set[tuple[Path, int, MethodBinding]] = set()
+        overridden_components = set(DESCRIPTOR_COMPONENTS)
         for state in states:
             group = state.get(name)
+            if group is None or not group.always_bound:
+                overridden_components.clear()
+            else:
+                overridden_components.intersection_update(group.overridden_descriptor_components)
             if group is None:
                 continue
             for declaration in group.declarations:
@@ -1044,6 +1107,13 @@ def _merge_class_method_states(
             always_bound=all(
                 (group := state.get(name)) is not None and group.always_bound for state in states
             ),
+            shadows_inherited_name=all(
+                (group := state.get(name)) is not None
+                and group.always_bound
+                and group.shadows_inherited_name
+                for state in states
+            ),
+            overridden_descriptor_components=frozenset(overridden_components),
         )
     return merged
 
@@ -1108,7 +1178,7 @@ def _function_descriptor_component(
     *,
     path: Path,
     context: ArchitectureContext,
-) -> tuple[DescriptorComponent | None, bool]:
+) -> tuple[DescriptorComponent | None, DescriptorBinding | None]:
     for decorator in function.decorator_list:
         expression = decorator.func if isinstance(decorator, ast.Call) else decorator
         if context.qualified_names(path, expression) & {
@@ -1116,15 +1186,14 @@ def _function_descriptor_component(
             "builtins.property",
             "property",
         }:
-            return "getter", False
+            return "getter", "fresh"
         chain = attribute_chain(expression)
-        if (
-            len(chain) == 2
-            and chain[0] == function.name
-            and chain[1] in {"getter", "setter", "deleter"}
-        ):
-            return cast(DescriptorComponent, chain[1]), True
-    return None, False
+        if len(chain) >= 2 and chain[-2] == function.name and chain[-1] in DESCRIPTOR_COMPONENTS:
+            return (
+                chain[-1],
+                "local" if len(chain) == 2 else "inherited",
+            )
+    return None, None
 
 
 def _project_function_definitions(
@@ -1250,6 +1319,16 @@ def _annotation_is_callable(
             context=context,
             visited=visited,
         )
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return any(
+            _annotation_is_callable(
+                member,
+                path=path,
+                context=context,
+                visited=visited,
+            )
+            for member in (annotation.left, annotation.right)
+        )
     root = annotation.value if isinstance(annotation, ast.Subscript) else annotation
     qualified = context.qualified_name(path, root)
     if qualified in {"collections.abc.Callable", "typing.Callable"}:
@@ -1268,6 +1347,24 @@ def _annotation_is_callable(
             path=path,
             context=context,
             visited=visited,
+        )
+    if isinstance(annotation, ast.Subscript) and qualified in {
+        "typing.Optional",
+        "typing.Union",
+    }:
+        members = (
+            annotation.slice.elts
+            if isinstance(annotation.slice, ast.Tuple)
+            else (annotation.slice,)
+        )
+        return any(
+            _annotation_is_callable(
+                member,
+                path=path,
+                context=context,
+                visited=visited,
+            )
+            for member in members
         )
     if qualified in visited:
         return False

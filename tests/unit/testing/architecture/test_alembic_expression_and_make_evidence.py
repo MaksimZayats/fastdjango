@@ -190,6 +190,79 @@ def test_short_circuited_pytest_outcomes_do_not_terminate_migration_evidence(
     assert _check(tmp_path).violations == ()
 
 
+@pytest.mark.parametrize(
+    "module_outcome",
+    [
+        "import pytest\npytest.skip('disabled', allow_module_level=True)\n",
+        "from pytest import xfail as stop_module\nstop_module('disabled')\n",
+        "import pytest as pt\npt.importorskip('optional_dependency')\n",
+    ],
+)
+def test_reachable_module_pytest_outcome_disables_migration_evidence(
+    tmp_path: Path,
+    module_outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        f"from alembic import command\n{module_outcome}\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _invalid_file(
+        _check(tmp_path),
+        "tests/integration/migrations/test_migrations.py",
+    )
+
+
+@pytest.mark.parametrize(
+    "dead_outcome",
+    [
+        "if False:\n    pytest.skip('disabled', allow_module_level=True)\n",
+        "True or pytest.xfail('disabled')\n",
+        "False and pytest.importorskip('optional_dependency')\n",
+        "pytest.skip('disabled', allow_module_level=True) if False else None\n",
+    ],
+)
+def test_dead_module_pytest_outcome_preserves_migration_evidence(
+    tmp_path: Path,
+    dead_outcome: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        f"from alembic import command\nimport pytest\n{dead_outcome}\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+def test_conditionally_reachable_module_pytest_outcome_disables_migration_evidence(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n"
+        "if optional_dependency_enabled:\n"
+        "    pytest.importorskip('optional_dependency')\n\n"
+        "def test_migrations():\n"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _invalid_file(
+        _check(tmp_path),
+        "tests/integration/migrations/test_migrations.py",
+    )
+
+
 def test_exception_handler_does_not_catch_pytest_outcome_for_migration_evidence(
     tmp_path: Path,
 ) -> None:

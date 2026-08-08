@@ -48,7 +48,9 @@ timezone remain deterministic. Walrus aliases and ambient callable parameter def
 reaching-flow analysis: a definite reassignment removes the default's provenance, while a conditional
 reassignment remains conservative. Effective methods follow Python C3 inheritance, including
 class-control-flow, exact descriptor-attached methods, and the effective getter, setter, and deleter
-components of properties. Inherited behavior has one diagnostic owner. Statically called nested
+components of properties. A fresh property shadows the inherited descriptor, while a qualified
+`@Base.property.getter`, `setter`, or `deleter` override replaces only that component under C3.
+Inherited behavior has one diagnostic owner. Statically called nested
 and module-local helper bodies are followed. Dormant nested function, class, and lambda bodies are not
 attributed to the enclosing behavior; their definition-time expressions are. Project-specific wrappers
 and fully dynamic dispatch still require review.
