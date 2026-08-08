@@ -26,7 +26,13 @@ AMBIENT_EXACT_CALLS = frozenset(
         "io.open",
         "os.chdir",
         "os.getcwd",
+        "os.getegid",
+        "os.geteuid",
+        "os.getgid",
+        "os.getlogin",
         "os.getpid",
+        "os.getppid",
+        "os.getuid",
         "os.getenv",
         "os.listdir",
         "os.lstat",
@@ -45,6 +51,9 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.system",
         "os.unsetenv",
         "os.path.exists",
+        "os.path.abspath",
+        "os.path.expanduser",
+        "os.path.expandvars",
         "os.path.getatime",
         "os.path.getctime",
         "os.path.getmtime",
@@ -54,8 +63,10 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.path.islink",
         "os.path.ismount",
         "os.path.lexists",
+        "os.path.realpath",
         "os.path.samefile",
         "sys.exit",
+        "getpass.getuser",
         "time.monotonic",
         "time.monotonic_ns",
         "time.perf_counter",
@@ -74,6 +85,7 @@ AMBIENT_EXACT_CALLS = frozenset(
 AMBIENT_PREFIXES = (
     "aiohttp.",
     "httpx.",
+    "locale.",
     "platform.",
     "os.environ.",
     "random.",
@@ -123,6 +135,10 @@ AMBIENT_VALUE_NAMES = frozenset(
         "sys.path",
         "sys.platform",
         "sys.prefix",
+        "time.altzone",
+        "time.daylight",
+        "time.timezone",
+        "time.tzname",
     }
 )
 SAFE_STDLIB_CONSTRUCTORS = frozenset(
@@ -146,10 +162,20 @@ SAFE_STDLIB_CONSTRUCTORS = frozenset(
 
 
 def resolved_call_name(call: ast.Call, *, path: Path, context: ArchitectureContext) -> str:
-    name = context.qualified_name(path, call.func)
-    if "." not in name and hasattr(builtins, name):
-        return f"builtins.{name}"
-    return name
+    names = resolved_call_names(call, path=path, context=context)
+    return next(iter(names)) if len(names) == 1 else f"<ambiguous:{','.join(sorted(names))}>"
+
+
+def resolved_call_names(
+    call: ast.Call,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> frozenset[str]:
+    return frozenset(
+        f"builtins.{name}" if "." not in name and hasattr(builtins, name) else name
+        for name in context.qualified_names(path, call.func)
+    )
 
 
 def is_ambient_runtime_call(
@@ -160,8 +186,17 @@ def is_ambient_runtime_call(
     function: ast.AsyncFunctionDef | ast.FunctionDef | None = None,
     class_node: ast.ClassDef | None = None,
 ) -> bool:
+    names = resolved_call_names(call, path=path, context=context)
+    if any(name in AMBIENT_EXACT_CALLS or name.startswith(AMBIENT_PREFIXES) for name in names):
+        return True
     name = resolved_call_name(call, path=path, context=context)
-    if name in AMBIENT_EXACT_CALLS or name.startswith(AMBIENT_PREFIXES):
+    if (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr == "astimezone"
+        and not call.args
+        and not call.keywords
+        and any(name.startswith("datetime.") for name in names)
+    ):
         return True
     chain = attribute_chain(call.func)
     path_roots: set[tuple[str, ...]] = (
@@ -285,14 +320,59 @@ def class_injected_callable_field_names(
             path, annotation.value
         ).endswith("diwire.Injected"):
             continue
-        dependency = annotation.slice
-        dependency_root = dependency.value if isinstance(dependency, ast.Subscript) else dependency
-        if context.qualified_name(path, dependency_root) in {
-            "collections.abc.Callable",
-            "typing.Callable",
-        }:
+        if _annotation_is_callable(annotation.slice, path=path, context=context, visited=set()):
             fields.add(child.target.id)
     return fields
+
+
+def _annotation_is_callable(
+    annotation: ast.expr,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    visited: set[str],
+) -> bool:
+    root = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    qualified = context.qualified_name(path, root)
+    if qualified in {"collections.abc.Callable", "typing.Callable"}:
+        return True
+    if qualified in visited:
+        return False
+    for alias_path in context.source_paths():
+        for node in context.tree(alias_path).body:
+            alias_name: str | None = None
+            value: ast.expr | None = None
+            type_alias_name = getattr(node, "name", None)
+            type_alias_value = getattr(node, "value", None)
+            if (
+                type(node).__name__ == "TypeAlias"
+                and isinstance(type_alias_name, ast.Name)
+                and isinstance(type_alias_value, ast.expr)
+            ):
+                alias_name, value = type_alias_name.id, type_alias_value
+            elif (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                alias_name, value = node.targets[0].id, node.value
+            if alias_name is None or value is None:
+                continue
+            module = ".".join(
+                (
+                    context.config.package_name,
+                    *alias_path.relative_to(context.src_root).with_suffix("").parts,
+                )
+            )
+            alias_qualified = f"{module}.{alias_name}"
+            if alias_qualified == qualified:
+                return _annotation_is_callable(
+                    value,
+                    path=alias_path,
+                    context=context,
+                    visited={*visited, qualified},
+                )
+    return False
 
 
 def call_is_injected_collaborator_or_uow(
@@ -319,13 +399,12 @@ def call_is_injected_collaborator_or_uow(
         )
     }
     direct_root = self_attribute_root_name(call.func)
-    resolved_chain = tuple(context.qualified_name(path, call.func).split("."))
-    resolved_injected_root = (
-        resolved_chain[1] if len(resolved_chain) >= 2 and resolved_chain[0] == "self" else None
-    )
-    if (
-        direct_root in injected_fields - callable_fields
-        or resolved_injected_root in injected_fields - callable_fields
+    resolved_chains = [tuple(name.split(".")) for name in context.qualified_names(path, call.func)]
+    resolved_injected_roots = {
+        chain[1] for chain in resolved_chains if len(chain) >= 2 and chain[0] == "self"
+    }
+    if direct_root in injected_fields - callable_fields or (
+        resolved_injected_roots and resolved_injected_roots <= injected_fields - callable_fields
     ):
         return True
     manager_fields = {
@@ -338,7 +417,11 @@ def call_is_injected_collaborator_or_uow(
     active_uows = active_uow_names_from_manager_fields(function, manager_fields)
     chain = attribute_chain(call.func)
     return bool(
-        (chain and chain[0] in active_uows) or (resolved_chain and resolved_chain[0] in active_uows)
+        (chain and chain[0] in active_uows)
+        or (
+            resolved_chains
+            and all(resolved_chain[0] in active_uows for resolved_chain in resolved_chains)
+        )
     )
 
 
@@ -382,12 +465,17 @@ def is_statically_recognized_constructor(
     path: Path,
     context: ArchitectureContext,
 ) -> bool:
-    resolved = resolved_call_name(call, path=path, context=context)
-    if resolved in project_class_qualified_names(context) or resolved in SAFE_STDLIB_CONSTRUCTORS:
-        return True
-    if not resolved.startswith("builtins."):
-        return False
-    return isinstance(getattr(builtins, resolved.removeprefix("builtins."), None), type)
+    resolved_names = resolved_call_names(call, path=path, context=context)
+    project_classes = project_class_qualified_names(context)
+    return bool(resolved_names) and all(
+        resolved in project_classes
+        or resolved in SAFE_STDLIB_CONSTRUCTORS
+        or (
+            resolved.startswith("builtins.")
+            and isinstance(getattr(builtins, resolved.removeprefix("builtins."), None), type)
+        )
+        for resolved in resolved_names
+    )
 
 
 def ambient_environment_nodes(
@@ -421,7 +509,4 @@ def ambient_runtime_value_nodes(
         if isinstance(node, (ast.Name, ast.Attribute))
         and isinstance(node.ctx, ast.Load)
         and context.qualified_name(path, node) in AMBIENT_VALUE_NAMES
-        and not any(
-            isinstance(parent, ast.Attribute) and parent.value is node for parent in ast.walk(tree)
-        )
     )

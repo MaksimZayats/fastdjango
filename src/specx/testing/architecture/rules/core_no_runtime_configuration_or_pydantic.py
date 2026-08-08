@@ -32,32 +32,17 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
         findings: list[SpecxArchitectureViolation] = []
         core_root = context.src_root / "core"
         definition_index = class_definition_base_index(context)
-        runtime_settings_names = {
-            qualified_class_name(node, source_path=path, context=context)
-            for path in context.source_paths()
-            for node in ast.walk(context.tree(path))
-            if isinstance(node, ast.ClassDef)
-            and class_has_foundation_base_at(
-                node,
-                "BaseRuntimeSettings",
-                source_path=path,
-                context=context,
-                definition_index=definition_index,
-            )
-        }
-        project_pydantic_names = {
-            qualified_class_name(node, source_path=path, context=context)
-            for path in context.source_paths()
-            for node in ast.walk(context.tree(path))
-            if isinstance(node, ast.ClassDef)
-            and class_has_foundation_base_at(
-                node,
-                "BaseModel",
-                source_path=path,
-                context=context,
-                definition_index=definition_index,
-            )
-        }
+        runtime_settings_names = _project_subclasses_of(
+            context,
+            exact_bases={
+                "pydantic_settings.BaseSettings",
+                "specx.infrastructure.foundation.settings.BaseRuntimeSettings",
+            },
+        )
+        project_pydantic_names = _project_subclasses_of(
+            context,
+            exact_bases={"pydantic.BaseModel"},
+        )
         for path in sorted(context.ast_project.files):
             if not path.is_relative_to(core_root):
                 continue
@@ -69,21 +54,27 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
                 or any(part in {"settings", "runtime_settings"} for part in module_parts(module))
             )
             bad_settings_references = sorted(
-                {
-                    context.qualified_name(path, annotation)
-                    for annotation in _annotation_expressions(tree)
-                    if context.qualified_name(path, annotation) in runtime_settings_names
-                    or context.qualified_name(path, annotation).endswith(".BaseRuntimeSettings")
-                }
+                _qualified_project_type_references(
+                    tree,
+                    path=path,
+                    context=context,
+                    qualified_types=runtime_settings_names,
+                )
+                | (
+                    _imported_symbol_names(tree, path=path, context=context)
+                    & runtime_settings_names
+                )
             )
             bad_pydantic_references = sorted(
-                project_pydantic_names
-                & (
-                    {
-                        context.qualified_name(path, annotation)
-                        for annotation in _annotation_expressions(tree)
-                    }
-                    | _imported_symbol_names(tree, path=path, context=context)
+                _qualified_project_type_references(
+                    tree,
+                    path=path,
+                    context=context,
+                    qualified_types=project_pydantic_names,
+                )
+                | (
+                    _imported_symbol_names(tree, path=path, context=context)
+                    & project_pydantic_names
                 )
             )
             if bad_imports:
@@ -160,17 +151,47 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
         return tuple(findings)
 
 
-def _annotation_expressions(tree: ast.Module) -> tuple[ast.expr, ...]:
-    expressions: list[ast.expr] = []
-    for node in ast.walk(tree):
-        annotation = node.annotation if isinstance(node, (ast.arg, ast.AnnAssign)) else None
-        if annotation is not None:
-            expressions.append(annotation)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None:
-            expressions.append(node.returns)
-        elif isinstance(node, ast.ClassDef):
-            expressions.extend(node.bases)
-    return tuple(expressions)
+def _qualified_project_type_references(
+    tree: ast.Module,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    qualified_types: set[str],
+) -> set[str]:
+    return {
+        qualified
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load)
+        if (qualified := context.qualified_name(path, node)) in qualified_types
+    }
+
+
+def _project_subclasses_of(
+    context: ArchitectureContext,
+    *,
+    exact_bases: set[str],
+) -> set[str]:
+    classes = {
+        qualified_class_name(node, source_path=path, context=context): (
+            path,
+            node,
+        )
+        for path in context.source_paths()
+        for node in context.tree(path).body
+        if isinstance(node, ast.ClassDef)
+    }
+    subclasses: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for qualified_name, (path, node) in classes.items():
+            if qualified_name in subclasses:
+                continue
+            resolved_bases = {context.qualified_name(path, base) for base in node.bases}
+            if resolved_bases & (exact_bases | subclasses):
+                subclasses.add(qualified_name)
+                changed = True
+    return subclasses
 
 
 def _imported_symbol_names(

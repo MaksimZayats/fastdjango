@@ -74,6 +74,11 @@ class TestsCoreBehaviorResolvesFromContainerRule(ArchitectureRuleBase):
                     test_tree is None
                     or not native_container_available
                     or _defines_local_container(test_tree)
+                    or _has_shadowing_container_fixture(
+                        context,
+                        test_path=test_path,
+                        unit_root=unit_root,
+                    )
                     or not _target_resolved_by_container(
                         test_tree,
                         qualified_class_name(
@@ -118,9 +123,13 @@ def _target_resolved_by_container(
             or _container_is_parametrized(function)
         ):
             continue
-        for call in (
-            node for node in _executable_function_nodes(function) if isinstance(node, ast.Call)
-        ):
+        executable_nodes = _executable_function_nodes(function)
+        awaited_call_ids = {
+            id(node.value)
+            for node in executable_nodes
+            if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
+        }
+        for call in (node for node in executable_nodes if isinstance(node, ast.Call)):
             if not (
                 isinstance(call.func, ast.Attribute)
                 and isinstance(call.func.value, ast.Name)
@@ -128,6 +137,10 @@ def _target_resolved_by_container(
                 and call.func.attr in {"resolve", "aresolve"}
                 and call.args
             ):
+                continue
+            if call.func.attr == "aresolve" and id(call) not in awaited_call_ids:
+                continue
+            if _container_reassigned_before(function, call):
                 continue
             argument = call.args[0]
             if (
@@ -159,12 +172,33 @@ def _has_native_container_fixture(
             for decorator in function.decorator_list
         ):
             continue
-        return any(
-            isinstance(call, ast.Call)
-            and context.qualified_name(path, call.func)
-            == f"{context.config.package_name}.ioc.container.get_container"
-            for call in ast.walk(function)
-        )
+        for statement in function.body:
+            value = statement.value if isinstance(statement, (ast.Return, ast.Expr)) else None
+            if isinstance(value, (ast.Yield, ast.YieldFrom)):
+                value = value.value
+            if (
+                isinstance(value, ast.Call)
+                and context.qualified_name(path, value.func)
+                == f"{context.config.package_name}.ioc.container.get_container"
+            ):
+                return True
+    return False
+
+
+def _has_shadowing_container_fixture(
+    context: ArchitectureContext,
+    *,
+    test_path: Path,
+    unit_root: Path,
+) -> bool:
+    parent = test_path.parent
+    while parent != unit_root and parent.is_relative_to(unit_root):
+        conftest = parent / "conftest.py"
+        if conftest in context.ast_project.files and _defines_local_container(
+            context.tree(conftest)
+        ):
+            return True
+        parent = parent.parent
     return False
 
 
@@ -218,6 +252,20 @@ def _container_is_parametrized(
     return False
 
 
+def _container_reassigned_before(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    call: ast.Call,
+) -> bool:
+    call_position = (call.lineno, call.col_offset)
+    return any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Store)
+        and node.id == "container"
+        and (node.lineno, node.col_offset) < call_position
+        for node in _executable_function_nodes(function)
+    )
+
+
 def _executable_function_nodes(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[ast.AST, ...]:
@@ -226,12 +274,39 @@ def _executable_function_nodes(
     def visit(node: ast.AST) -> None:
         if node is not function and isinstance(
             node,
-            (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+            (
+                ast.ClassDef,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.Lambda,
+                ast.ListComp,
+                ast.SetComp,
+                ast.DictComp,
+                ast.GeneratorExp,
+            ),
         ):
             return
         nodes.append(node)
-        for child in ast.iter_child_nodes(node):
-            visit(child)
+        if isinstance(node, ast.If) and _is_statically_false(node.test):
+            for statement in node.orelse:
+                visit(statement)
+            return
+        if isinstance(node, ast.If) and _is_statically_true(node.test):
+            for statement in node.body:
+                visit(statement)
+            return
+        for descendant in ast.iter_child_nodes(node):
+            visit(descendant)
 
     visit(function)
     return tuple(nodes)
+
+
+def _is_statically_false(expression: ast.expr) -> bool:
+    return (isinstance(expression, ast.Constant) and expression.value is False) or (
+        isinstance(expression, ast.Name) and expression.id == "TYPE_CHECKING"
+    )
+
+
+def _is_statically_true(expression: ast.expr) -> bool:
+    return isinstance(expression, ast.Constant) and expression.value is True

@@ -3,10 +3,12 @@ from __future__ import annotations
 import ast
 import configparser
 import re
+import shlex
 from pathlib import Path
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
+    class_declares_sqlalchemy_mapping,
     class_definition_base_index,
     class_has_foundation_base_at,
     class_is_statically_abstract_at,
@@ -81,10 +83,13 @@ def _has_concrete_model(context: ArchitectureContext) -> bool:
     for path in context.source_paths():
         if any(
             isinstance(node, ast.ClassDef)
-            and not class_is_statically_abstract_at(
-                node,
-                source_path=path,
-                context=context,
+            and (
+                not class_is_statically_abstract_at(
+                    node,
+                    source_path=path,
+                    context=context,
+                )
+                or class_declares_sqlalchemy_mapping(node)
             )
             and class_has_foundation_base_at(
                 node,
@@ -132,25 +137,31 @@ def _has_required_markers(name: str, text: str) -> bool:
     if tree is None:
         return False
     if name == "migrations/env.py":
-        return _has_call(tree, "context.configure") and any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name.startswith("run_migrations")
-            for node in ast.walk(tree)
-        )
-    return (
-        any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name.startswith("test_")
-            for node in ast.walk(tree)
-        )
-        and any(_call_name(call).endswith("upgrade") for call in _calls(tree))
-        and any(
-            any(
-                marker in _call_name(call)
-                for marker in ("compare_metadata", "produce_migrations", "check", "drift")
+        bindings = _import_bindings(tree)
+        valid_entrypoints = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in {"run_migrations_offline", "run_migrations_online"}
+            and any(
+                _qualified_call_name(call, bindings) == "alembic.context.configure"
+                for call in _calls_in_executable_scope(node)
             )
-            for call in _calls(tree)
+            and any(
+                _qualified_call_name(call, bindings) == "alembic.context.run_migrations"
+                for call in _calls_in_executable_scope(node)
+            )
+        }
+        return bool(valid_entrypoints) and any(
+            _qualified_call_name(call, bindings) in valid_entrypoints
+            for call in _module_executable_calls(tree)
         )
+    bindings = _import_bindings(tree)
+    return any(
+        _test_function_has_migration_evidence(node, bindings=bindings)
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
     )
 
 
@@ -172,7 +183,19 @@ def _valid_revision(text: str) -> bool:
     functions = {
         node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    return assigned_revision and {"upgrade", "downgrade"} <= functions
+    bindings = _import_bindings(tree)
+    migration_functions = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in {"upgrade", "downgrade"}
+    ]
+    has_alembic_operation = any(
+        _qualified_call_name(call, bindings).startswith("alembic.op.")
+        for function in migration_functions
+        for call in _calls_in_executable_scope(function)
+    )
+    return assigned_revision and {"upgrade", "downgrade"} <= functions and has_alembic_operation
 
 
 def _valid_make_recipe(target: str, recipe: str) -> bool:
@@ -182,12 +205,12 @@ def _valid_make_recipe(target: str, recipe: str) -> bool:
         "migration-check": ("alembic", "check"),
     }
     commands = [
-        line.lstrip("\t@- ")
+        _shell_tokens(line.lstrip("\t@- "))
         for line in recipe.splitlines()
         if line.startswith("\t") and not line.lstrip("\t@- ").startswith("#")
     ]
     return any(
-        all(fragment in command for fragment in required_fragments[target]) for command in commands
+        _invokes_alembic(command, action=required_fragments[target][1]) for command in commands
     )
 
 
@@ -198,13 +221,133 @@ def _parse_python(text: str) -> ast.Module | None:
         return None
 
 
-def _calls(tree: ast.Module) -> tuple[ast.Call, ...]:
-    return tuple(node for node in ast.walk(tree) if isinstance(node, ast.Call))
+def _test_function_has_migration_evidence(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    calls = _calls_in_executable_scope(function)
+    return any(
+        _qualified_call_name(call, bindings) == "alembic.command.upgrade" for call in calls
+    ) and any(
+        _qualified_call_name(call, bindings)
+        in {
+            "alembic.autogenerate.compare_metadata",
+            "alembic.autogenerate.produce_migrations",
+            "alembic.command.check",
+        }
+        for call in calls
+    )
 
 
-def _call_name(call: ast.Call) -> str:
-    return ast.unparse(call.func)
+def _calls_in_executable_scope(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.Call, ...]:
+    return tuple(node for node in _executable_scope_nodes(function) if isinstance(node, ast.Call))
 
 
-def _has_call(tree: ast.Module, name: str) -> bool:
-    return any(_call_name(call).endswith(name) for call in _calls(tree))
+def _module_executable_calls(tree: ast.Module) -> tuple[ast.Call, ...]:
+    wrapper = ast.FunctionDef(
+        name="<module>",
+        args=ast.arguments(
+            posonlyargs=[],
+            args=[],
+            kwonlyargs=[],
+            kw_defaults=[],
+            defaults=[],
+        ),
+        body=tree.body,
+        decorator_list=[],
+    )
+    return _calls_in_executable_scope(wrapper)
+
+
+def _executable_scope_nodes(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.AST, ...]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not function and isinstance(
+            node,
+            (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            return
+        nodes.append(node)
+        if isinstance(node, ast.If) and _is_statically_false(node.test):
+            for statement in node.orelse:
+                visit(statement)
+            return
+        if isinstance(node, ast.If) and _is_statically_true(node.test):
+            for statement in node.body:
+                visit(statement)
+            return
+        for descendant in ast.iter_child_nodes(node):
+            visit(descendant)
+
+    visit(function)
+    return tuple(nodes)
+
+
+def _import_bindings(tree: ast.Module) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bindings[alias.asname or alias.name.split(".")[0]] = (
+                    alias.name if alias.asname else alias.name.split(".")[0]
+                )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return bindings
+
+
+def _qualified_call_name(call: ast.Call, bindings: dict[str, str]) -> str:
+    parts: list[str] = []
+    expression: ast.expr = call.func
+    while isinstance(expression, ast.Attribute):
+        parts.append(expression.attr)
+        expression = expression.value
+    if not isinstance(expression, ast.Name):
+        return ast.unparse(call.func)
+    root = bindings.get(expression.id, expression.id)
+    return ".".join((root, *reversed(parts)))
+
+
+def _shell_tokens(command: str) -> tuple[str, ...]:
+    try:
+        return tuple(shlex.split(command, comments=True, posix=True))
+    except ValueError:
+        return ()
+
+
+def _invokes_alembic(tokens: tuple[str, ...], *, action: str) -> bool:
+    if not tokens:
+        return False
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
+        index += 1
+    remaining = tokens[index:]
+    if remaining[:2] in {("uv", "run"), ("poetry", "run")}:
+        remaining = remaining[2:]
+    executable = Path(remaining[0]).name if remaining else ""
+    if (
+        len(remaining) >= 3
+        and executable.startswith("python")
+        and remaining[1:3]
+        == (
+            "-m",
+            "alembic",
+        )
+    ):
+        remaining = remaining[2:]
+    return len(remaining) >= 2 and remaining[0] == "alembic" and remaining[1] == action
+
+
+def _is_statically_false(expression: ast.expr) -> bool:
+    return isinstance(expression, ast.Constant) and expression.value is False
+
+
+def _is_statically_true(expression: ast.expr) -> bool:
+    return isinstance(expression, ast.Constant) and expression.value is True

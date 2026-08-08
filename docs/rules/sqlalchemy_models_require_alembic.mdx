@@ -32,8 +32,9 @@ class OrderModel(BaseSQLAlchemyModel):
 
 ### Detection notes
 
-When a concrete model exists, parses Alembic configuration and Python modules for real configuration
-calls, migration functions, revision identifiers, and an upgrade-and-drift integration test. It also
-requires executable `migrate`, `makemigrations`, and `migration-check` recipes that invoke Alembic;
-comment-only placeholders do not count. Statically abstract or `Base...` declarative foundation
-classes do not activate the rule.
+When a concrete model exists, parses Alembic configuration and Python imports for Alembic-qualified
+configuration and migration calls, an invoked migration entrypoint, an operational revision, and
+upgrade-and-drift evidence in the same executable test body. It also shell-tokenizes `migrate`,
+`makemigrations`, and `migration-check` recipes and requires them to invoke Alembic directly;
+comments, `echo`, dead branches, and uncalled helpers do not count. Statically abstract declarative
+foundation classes do not activate the rule unless they declare a concrete table mapping.

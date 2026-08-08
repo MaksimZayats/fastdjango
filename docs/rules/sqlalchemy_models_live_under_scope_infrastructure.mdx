@@ -32,5 +32,6 @@ class OrderModel(BaseSQLAlchemyModel):
 
 ### Detection notes
 
-Follows path-qualified project inheritance from `BaseSQLAlchemyModel`. Statically abstract or
-`Base...` project foundation classes are exempt, but a concrete model in a foundation path still fails.
+Follows exact path-qualified project inheritance from `BaseSQLAlchemyModel`. Statically abstract
+project foundation classes are exempt, but an explicit table mapping remains concrete and fails
+outside scope infrastructure even when its class name starts with `Base`.

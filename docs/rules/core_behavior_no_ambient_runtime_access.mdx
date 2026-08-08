@@ -35,6 +35,8 @@ class TokenService(BaseEffectService):
 
 ### Detection notes
 
-Recognizes documented standard-library and client effect APIs through lexical aliases, including
-environment, process, network, and filesystem calls plus typed or derived `pathlib.Path` values.
-Project-specific wrappers and fully dynamic dispatch still require review.
+Checks methods inherited through project bases and mixins. It recognizes documented standard-library
+and client effect APIs through conservative branch-aware aliases, including environment, process,
+locale, timezone, network, and filesystem calls, ambient values such as `sys.argv`, and typed or
+derived `pathlib.Path` values. Project-specific wrappers and fully dynamic dispatch still require
+review.

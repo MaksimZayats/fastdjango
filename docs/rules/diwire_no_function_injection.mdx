@@ -32,5 +32,6 @@ class Handler(BaseController):
 
 ### Detection notes
 
-Recognizes exact `resolver_context.inject` calls and decorators plus exact `diwire.Injected[...]`
-parameters on functions and methods. Constructor fields and ordinary pytest parameters pass.
+Recognizes exact `resolver_context.inject` calls and definition-time decorator aliases plus
+`diwire.Injected[...]`, assigned injection aliases, and explicit injection markers on functions and
+methods. Constructor fields and ordinary pytest parameters pass.

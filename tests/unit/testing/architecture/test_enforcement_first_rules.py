@@ -286,7 +286,11 @@ def test_sqlalchemy_model_placement_and_alembic_surface(tmp_path: Path) -> None:
     _write(tmp_path / "alembic.ini", "[alembic]\nscript_location = migrations\n")
     _write(
         tmp_path / "migrations/env.py",
-        "def run_migrations_online():\n    context.configure(connection=connection)\n",
+        "from alembic import context\n\n"
+        "def run_migrations_online():\n"
+        "    context.configure(connection=connection)\n"
+        "    context.run_migrations()\n\n"
+        "run_migrations_online()\n",
     )
     _write(
         tmp_path / "migrations/script.py.mako",
@@ -294,10 +298,15 @@ def test_sqlalchemy_model_placement_and_alembic_surface(tmp_path: Path) -> None:
     )
     _write(
         tmp_path / "migrations/versions/0001_orders.py",
-        "revision = '0001'\ndef upgrade(): ...\ndef downgrade(): ...\n",
+        "from alembic import op\n\n"
+        "revision = '0001'\n"
+        "def upgrade(): op.execute('SELECT 1')\n"
+        "def downgrade(): op.execute('SELECT 1')\n",
     )
     _write(
         tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "from alembic.autogenerate import compare_metadata\n\n"
         "def test_upgrade_and_drift():\n"
         "    command.upgrade(config, 'head')\n"
         "    compare_metadata(context, metadata)\n",
@@ -567,6 +576,57 @@ def test_alembic_rule_rejects_placeholder_files_and_recipes(tmp_path: Path) -> N
     assert "without Alembic recipes" in report.violations[0].message
 
 
+def test_alembic_rule_requires_real_provenance_executable_tests_and_commands(
+    tmp_path: Path,
+) -> None:
+    _write(
+        _source(tmp_path, "core/orders/infrastructure/sqlalchemy/models/order.py"),
+        "from specx.infrastructure.foundation.sqlalchemy.model import BaseSQLAlchemyModel\n\n"
+        "class OrderModel(BaseSQLAlchemyModel): pass\n",
+    )
+    _write(tmp_path / "alembic.ini", "[alembic]\nscript_location = migrations\n")
+    _write(
+        tmp_path / "migrations/env.py",
+        "class FakeContext:\n"
+        "    def configure(self): pass\n"
+        "context = FakeContext()\n"
+        "def run_migrations_offline(): context.configure()\n",
+    )
+    _write(
+        tmp_path / "migrations/script.py.mako",
+        "def upgrade(): ...\ndef downgrade(): ...\n",
+    )
+    _write(
+        tmp_path / "migrations/versions/0001.py",
+        "from alembic import op\n"
+        "revision = '0001'\n"
+        "def upgrade(): op.execute('SELECT 1')\n"
+        "def downgrade(): op.execute('SELECT 1')\n",
+    )
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "def fake_upgrade(): pass\n"
+        "def fake_compare_metadata(): pass\n"
+        "def test_unrelated():\n"
+        "    if False:\n"
+        "        fake_upgrade()\n"
+        "        fake_compare_metadata()\n",
+    )
+    _write(
+        tmp_path / "Makefile",
+        "migrate:\n\tfalse # alembic upgrade\n"
+        "makemigrations:\n\tfalse # alembic revision\n"
+        "migration-check:\n\techo alembic check\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.SQLALCHEMY_MODELS_REQUIRE_ALEMBIC)
+
+    assert len(report.violations) == 1
+    assert "migrations/env.py" in report.violations[0].message
+    assert "test_migrations.py" in report.violations[0].message
+    assert "Alembic recipes" in report.violations[0].message
+
+
 def test_statement_order_aliases_preserve_ambient_and_diwire_ownership(tmp_path: Path) -> None:
     _write(
         _source(tmp_path, "core/orders/services/time_service.py"),
@@ -786,6 +846,263 @@ def test_same_named_services_do_not_corrupt_path_qualified_inheritance(tmp_path:
 
     assert len(report.violations) == 1
     assert report.violations[0].path == _source(tmp_path, "core/a/services/order.py")
+
+
+def test_abstract_and_mixin_behavior_methods_remain_enforced(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "foundation/runtime_mixin.py"),
+        "import os\n\n"
+        "class RuntimeMixin(object):\n"
+        "    def token(self, size: int) -> bytes:\n"
+        "        return os.urandom(size)\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/token.py"),
+        "from abc import abstractmethod\n"
+        "import time\n"
+        "from demo_service.foundation.runtime_mixin import RuntimeMixin\n"
+        "from specx.core.foundation.effect_service import BaseEffectService\n\n"
+        "class AbstractTokenService(BaseEffectService):\n"
+        "    def now(self) -> float: return time.time()\n"
+        "    @abstractmethod\n"
+        "    def issue(self) -> bytes: ...\n\n"
+        "class TokenService(RuntimeMixin, AbstractTokenService):\n"
+        "    def issue(self) -> bytes: return self.token(8)\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS)
+
+    assert len(report.violations) == 2
+
+
+def test_service_signature_rule_checks_inherited_methods_and_varargs(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "foundation/price_mixin.py"),
+        "class PriceMixin(object):\n"
+        "    def total(self, price): return price\n"
+        "    def combine(self, *values): return values\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/price.py"),
+        "from demo_service.foundation.price_mixin import PriceMixin\n"
+        "from specx.core.foundation.pure_service import BasePureService\n\n"
+        "class PriceService(PriceMixin, BasePureService):\n    pass\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.SERVICE_METHODS_USE_KEYWORD_ONLY_ARGUMENTS)
+
+    assert {item.symbol for item in report.violations} == {
+        "PriceService.combine",
+        "PriceService.total",
+    }
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "def test_graph(container):\n    if False:\n        container.resolve(OrderService)\n",
+        "def test_graph(container):\n    container = Fake()\n    container.resolve(OrderService)\n",
+        "async def test_graph(container):\n    container.aresolve(OrderService)\n",
+    ],
+)
+def test_container_resolution_rejects_dead_reassigned_or_unawaited_proofs(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    _write_native_container_fixture(tmp_path)
+    _write(
+        _source(tmp_path, "core/orders/services/order.py"),
+        "from specx.core.foundation.pure_service import BasePureService\n\n"
+        "class OrderService(BasePureService): pass\n",
+    )
+    _write(
+        tmp_path / "tests/unit/core/orders/services/test_order.py",
+        "from demo_service.core.orders.services.order import OrderService\n"
+        "class Fake:\n    def resolve(self, target): pass\n\n" + test_source,
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.TESTS_CORE_BEHAVIOR_RESOLVES_FROM_CONTAINER)
+
+    assert [item.symbol for item in report.violations] == ["OrderService"]
+
+
+def test_container_resolution_rejects_fake_native_and_nearer_fixtures(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "tests/unit/conftest.py",
+        "import pytest\n"
+        "from demo_service.ioc.container import get_container\n\n"
+        "@pytest.fixture\n"
+        "def container():\n"
+        "    if False: get_container()\n"
+        "    return object()\n",
+    )
+    _write(
+        tmp_path / "tests/unit/core/orders/services/conftest.py",
+        "def container(): return object()\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/order.py"),
+        "from specx.core.foundation.pure_service import BasePureService\n\n"
+        "class OrderService(BasePureService): pass\n",
+    )
+    _write(
+        tmp_path / "tests/unit/core/orders/services/test_order.py",
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container): container.resolve(OrderService)\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.TESTS_CORE_BEHAVIOR_RESOLVES_FROM_CONTAINER)
+
+    assert [item.symbol for item in report.violations] == ["OrderService"]
+
+
+def test_alias_resolution_merges_branches_but_honors_unconditional_rebinding(
+    tmp_path: Path,
+) -> None:
+    _write(
+        _source(tmp_path, "core/orders/services/time_service.py"),
+        "import time\n"
+        "from demo_service import safe\n"
+        "from specx.core.foundation.effect_service import BaseEffectService\n\n"
+        "class TimeService(BaseEffectService):\n"
+        "    def maybe(self, *, flag: bool) -> float:\n"
+        "        now = time.time\n"
+        "        if flag: now = safe.time\n"
+        "        return now()\n"
+        "    def safe(self) -> float:\n"
+        "        now = time.time\n"
+        "        now = safe.time\n"
+        "        return now()\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS)
+
+    assert len(report.violations) == 1
+    assert report.violations[0].line == 9
+
+
+def test_definition_time_aliases_ignore_later_rebinding(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "core/orders/dtos/order.py"),
+        "from dataclasses import dataclass\n"
+        "from specx.core.foundation.dto import BaseDTO\n\n"
+        "fake = lambda cls=None, **kwargs: cls\n"
+        "@fake(frozen=True, kw_only=True, slots=True)\n"
+        "class BadDTO(BaseDTO): pass\n"
+        "fake = dataclass\n",
+    )
+    _write(
+        tmp_path / "tests/unit/test_handler.py",
+        "from diwire import resolver_context\n\n"
+        "inject = resolver_context.inject\n"
+        "@inject\n"
+        "def handler(): pass\n"
+        "inject = lambda fn: fn\n",
+    )
+
+    dataclass_report = _check_only(tmp_path, SpecxRuleId.CORE_CONTRACTS_USE_IMMUTABLE_DATACLASSES)
+    injection_report = _check_only(tmp_path, SpecxRuleId.DIWIRE_NO_FUNCTION_INJECTION)
+
+    assert [item.symbol for item in dataclass_report.violations] == ["BadDTO"]
+    assert [item.symbol for item in injection_report.violations] == ["handler"]
+
+
+def test_function_di_and_callable_policy_resolve_type_aliases(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "tests/unit/test_handler.py",
+        "from diwire import Injected\n\n"
+        "InjectedValue = Injected[int]\n"
+        "def handler(value: InjectedValue): pass\n",
+    )
+    _write(
+        _source(tmp_path, "contracts.py"),
+        "from collections.abc import Callable\n\ntype Formatter = Callable[[str], str]\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/use_cases/format_order.py"),
+        "from diwire import Injected\n"
+        "from demo_service.contracts import Formatter\n"
+        "from specx.core.foundation.use_case import BaseUseCase\n\n"
+        "class FormatOrderUseCase(BaseUseCase):\n"
+        "    formatter: Injected[Formatter]\n"
+        "    def execute(self, *, query: object) -> str:\n"
+        "        return self.formatter('order')\n",
+    )
+
+    injection = _check_only(tmp_path, SpecxRuleId.DIWIRE_NO_FUNCTION_INJECTION)
+    orchestration = _check_only(tmp_path, SpecxRuleId.USE_CASES_ORCHESTRATE_THROUGH_COLLABORATORS)
+
+    assert [item.symbol for item in injection.violations] == ["handler"]
+    assert len(orchestration.violations) == 1
+
+
+def test_core_runtime_types_use_exact_ancestry_and_runtime_references(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "contracts.py"),
+        "from pydantic import BaseModel as PydanticModel\n"
+        "from pydantic_settings import BaseSettings\n\n"
+        "class Request(PydanticModel): pass\n"
+        "class AppConfig(BaseSettings): pass\n\n"
+        "class BaseModel: pass\n"
+        "class DomainValue(BaseModel): pass\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/order.py"),
+        "import demo_service.contracts as contracts\n"
+        "from demo_service.contracts import AppConfig, DomainValue\n\n"
+        "def build():\n"
+        "    contracts.Request.model_validate({})\n"
+        "    AppConfig()\n"
+        "    return DomainValue()\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_NO_RUNTIME_CONFIGURATION_OR_PYDANTIC)
+
+    assert len(report.violations) == 2
+    assert all("DomainValue" not in item.message for item in report.violations)
+
+
+def test_ambient_policy_covers_process_path_locale_and_timezone_state(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "core/orders/services/runtime.py"),
+        "import locale\nimport os\nimport time\n"
+        "from datetime import datetime\n"
+        "from specx.core.foundation.effect_service import BaseEffectService\n\n"
+        "class RuntimeService(BaseEffectService):\n"
+        "    def inspect(self) -> object:\n"
+        "        os.path.abspath('.')\n"
+        "        os.getppid()\n"
+        "        locale.getlocale()\n"
+        "        datetime.fromtimestamp(0).astimezone()\n"
+        "        return time.tzname\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS)
+
+    assert len(report.violations) == 5
+
+
+def test_mapped_base_named_model_is_concrete_and_foundation_names_are_exact(
+    tmp_path: Path,
+) -> None:
+    _write(
+        _source(tmp_path, "foundation/base_order_model.py"),
+        "from specx.infrastructure.foundation.sqlalchemy.model import BaseSQLAlchemyModel\n\n"
+        "class BaseOrderModel(BaseSQLAlchemyModel):\n"
+        "    __tablename__ = 'orders'\n",
+    )
+    _write(
+        _source(tmp_path, "misc.py"),
+        "class BaseUseCase: pass\n"
+        "class LocalUseCase(BaseUseCase):\n"
+        "    def execute(self): return helper()\n",
+    )
+
+    placement = _check_only(tmp_path, SpecxRuleId.SQLALCHEMY_MODELS_LIVE_UNDER_SCOPE_INFRASTRUCTURE)
+    orchestration = _check_only(tmp_path, SpecxRuleId.USE_CASES_ORCHESTRATE_THROUGH_COLLABORATORS)
+
+    assert [item.symbol for item in placement.violations] == ["BaseOrderModel"]
+    assert orchestration.violations == ()
 
 
 @pytest.mark.parametrize("name", ["gather", "asyncio.*", "asyncio..gather", "class.call"])

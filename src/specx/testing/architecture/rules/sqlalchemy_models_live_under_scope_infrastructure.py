@@ -4,6 +4,7 @@ import ast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
+    class_declares_sqlalchemy_mapping,
     class_definition_base_index,
     class_has_foundation_base_at,
     class_is_statically_abstract_at,
@@ -33,10 +34,13 @@ class SQLAlchemyModelsLiveUnderScopeInfrastructureRule(ArchitectureRuleBase):
                 and relative.parts[2] == "infrastructure"
             )
             for node in ast.walk(context.tree(path)):
-                if not isinstance(node, ast.ClassDef) or class_is_statically_abstract_at(
-                    node,
-                    source_path=path,
-                    context=context,
+                if not isinstance(node, ast.ClassDef) or (
+                    class_is_statically_abstract_at(
+                        node,
+                        source_path=path,
+                        context=context,
+                    )
+                    and not class_declares_sqlalchemy_mapping(node)
                 ):
                     continue
                 if not correctly_placed and class_has_foundation_base_at(

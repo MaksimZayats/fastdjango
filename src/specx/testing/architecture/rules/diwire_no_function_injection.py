@@ -98,6 +98,18 @@ def _is_injected_annotation(
     path: Path,
     context: ArchitectureContext,
 ) -> bool:
+    if annotation is None:
+        return False
+    if context.qualified_name(path, annotation) == "diwire.Injected":
+        return True
     if not isinstance(annotation, ast.Subscript):
         return False
-    return context.qualified_name(path, annotation.value) == "diwire.Injected"
+    if context.qualified_name(path, annotation.value) == "diwire.Injected":
+        return True
+    if context.qualified_name(path, annotation.value) not in {
+        "typing.Annotated",
+        "typing_extensions.Annotated",
+    }:
+        return False
+    elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else ()
+    return any("Injected" in context.qualified_name(path, element) for element in elements[1:])

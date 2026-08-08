@@ -59,11 +59,11 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "use-cases.orchestrate-through-collaborators": _guidance(
         "Move behavior behind an injected collaborator, construct a project type, or approve an exact qualified function.",
-        "Resolves static lexical aliases, project constructors, typed collaborator fields, and manager-owned UoWs; injected plain callables and dynamic dispatch are not collaborators.",
+        "Checks inherited project methods, merges reachable lexical aliases conservatively, and resolves constructors, typed collaborators, manager-owned UoWs, and callable type aliases.",
     ),
     "core.behavior-no-ambient-runtime-access": _guidance(
         "Inject a capability or gateway for time, randomness, IDs, environment, filesystem, process, or network access.",
-        "Recognizes documented standard-library and client effect APIs, aliases, and statically typed pathlib values.",
+        "Checks inherited project methods and recognizes documented standard-library/client effects, ambient values, reachable aliases, and typed pathlib values.",
     ),
     "core.contracts-use-immutable-dataclasses": _guidance(
         "Decorate the contract with @dataclass(frozen=True, kw_only=True, slots=True).",
@@ -71,7 +71,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "core.no-runtime-configuration-or-pydantic": _guidance(
         "Move runtime settings and Pydantic models to an edge and pass typed values or collaborators into core.",
-        "Scans every core Python module for direct and project-wrapped Pydantic types, runtime-settings annotations, and direct environment access.",
+        "Scans every core module for runtime references to exact Pydantic/settings ancestry, including project wrappers, plus direct environment access.",
     ),
     "use-cases.commands-and-queries-live-local": _guidance(
         "Move the command or query class into the use-case module that consumes it.",
@@ -119,7 +119,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "services.methods-use-keyword-only-arguments": _guidance(
         "Insert * after self or cls so every public service input is keyword-only.",
-        "Follows path-qualified service inheritance and checks public method signatures.",
+        "Follows effective project service inheritance and rejects positional parameters and variadic positional arguments after self or cls.",
     ),
     "services.pure-no-io-or-runtime-state": _guidance(
         "Move IO or runtime-state behavior to an effect boundary and keep the pure service deterministic.",
@@ -147,7 +147,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "diwire.no-function-injection": _guidance(
         "Use Injected fields on classes; tests should accept ordinary fixtures and resolve the target from container.",
-        "Recognizes exact DIWire Injected annotations and resolver_context.inject calls or decorators on functions and methods.",
+        "Resolves definition-time DIWire decorator aliases, Injected aliases, and Annotated injection markers on functions and methods.",
     ),
     "logging.no-injected-loggers": _guidance(
         "Create a private class logger from the full module and class name instead of injecting or registering Logger.",
@@ -163,11 +163,11 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "sqlalchemy.models-live-under-scope-infrastructure": _guidance(
         "Move each concrete model under core/<scope>/infrastructure/<technology>; keep only an abstract/base model in foundation.",
-        "Follows path-qualified BaseSQLAlchemyModel inheritance and excludes statically abstract or Base-prefixed classes.",
+        "Follows exact BaseSQLAlchemyModel ancestry; explicit table mappings remain concrete even when a foundation-path class starts with Base.",
     ),
     "sqlalchemy.models-require-alembic": _guidance(
         "Add meaningful Alembic config, env and revision files, migration commands, and an upgrade-and-drift integration test.",
-        "Activates for concrete SQLAlchemy models and validates prescribed files, semantic markers, revisions, and Make recipes.",
+        "Validates Alembic-qualified executable calls, invoked migration entrypoints, operational revisions, same-test upgrade/drift evidence, and parsed Make recipes.",
     ),
     "delivery.foundation-classes-live-under-delivery": _guidance(
         "Move every controller, delivery service, schema, or lifecycle under top-level delivery/.",
@@ -187,7 +187,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "tests.core-behavior-resolves-from-container": _guidance(
         "Use the native tests/unit/conftest.py container fixture and resolve every exact concrete behavior class in the mirrored test body.",
-        "Validates fixture provenance, excludes nested scopes and parametrized shadows, skips inherited abstract classes, and matches exact imported target symbols.",
+        "Requires a directly returned native container, rejects nearer fixtures/reassignment/dead code, requires awaited aresolve, skips inherited abstract classes, and matches exact targets.",
     ),
     "tests.fixtures-do-not-bundle-mocks": _guidance(
         "Keep one-off mocks in the test and replace grouped mock fixtures with focused fixtures or mirrored fakes.",
