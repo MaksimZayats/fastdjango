@@ -1,0 +1,42 @@
+export const ruleId = 'use-cases.one-per-module'
+export const summary = 'Require each managed use-case module to define only one use case.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="use_cases_one_per_module"></span>
+
+## `use-cases.one-per-module`
+
+Require each managed use-case module to define only one use case.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+One application action per module gives project management commands a stable component/module ID
+without adding a runtime registry or asking users to spell Python class paths.
+
+### Failing example
+
+```python
+class CreateOrderUseCase(BaseUseCase):
+    ...
+
+class CancelOrderUseCase(BaseUseCase):
+    ...
+```
+
+### Passing example
+
+```python
+class CreateOrderUseCase(BaseUseCase):
+    async def execute(self, *, command: CreateOrderCommand) -> OrderDTO:
+        ...
+```
+
+### Detection notes
+
+Checks non-initializer modules beneath `core/*/use_cases/`. It reports a module with no use case, or
+the second class when multiple classes inherit `BaseUseCase`, directly or through a recognized
+project-local base.

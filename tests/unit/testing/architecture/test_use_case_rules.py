@@ -165,6 +165,43 @@ def test_query_mutation_rule_does_not_cross_module_name_collisions(tmp_path: Pat
     assert report.violations == ()
 
 
+def test_one_use_case_per_module_rule_reports_ambiguous_module(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "src" / "demo_service" / "core" / "tasks" / "use_cases" / "manage.py",
+        "class CreateTaskUseCase(BaseUseCase):\n    pass\n\n"
+        "class CancelTaskUseCase(BaseUseCase):\n    pass\n",
+    )
+
+    report = check_specx_architecture(
+        SpecxArchitectureConfig(
+            project_root=tmp_path,
+            package_name="demo_service",
+            disabled_rules=_disable_all_except(SpecxRuleId.USE_CASE_MODULES_DEFINE_ONE_USE_CASE),
+        )
+    )
+
+    assert len(report.violations) == 1
+    assert report.violations[0].message == "module defines 2 use cases; expected one"
+
+
+def test_one_use_case_per_module_rule_reports_module_without_use_case(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "src" / "demo_service" / "core" / "tasks" / "use_cases" / "helpers.py",
+        "def normalize_title(value: str) -> str:\n    return value.strip()\n",
+    )
+
+    report = check_specx_architecture(
+        SpecxArchitectureConfig(
+            project_root=tmp_path,
+            package_name="demo_service",
+            disabled_rules=_disable_all_except(SpecxRuleId.USE_CASE_MODULES_DEFINE_ONE_USE_CASE),
+        )
+    )
+
+    assert len(report.violations) == 1
+    assert report.violations[0].message == "module defines 0 use cases; expected one"
+
+
 def _disable_all_except(rule_id: SpecxRuleId) -> frozenset[SpecxRuleId]:
     return frozenset(candidate for candidate in SpecxRuleId if candidate != rule_id)
 

@@ -35,6 +35,29 @@ synchronizes the environment. Use `--no-sync` only when the caller needs an
 offline or render-only workflow, then run both commands before the generated
 locked commands.
 
+Inspect the initialized project through the structural management interface:
+
+```bash
+specx project component list --output-format json
+specx project use-case show health/check-health --output-format json
+specx project use-case run health/check-health
+```
+
+New actions can start from a deterministic typed scaffold. Preview the complete file manifest first:
+
+```bash
+specx project use-case create orders/create-order \
+  --kind command \
+  --input-field customer_id:str \
+  --result-field order_id:int \
+  --dry-run \
+  --output-format json
+```
+
+The generator creates one use case per module, a result DTO, and a temporary
+green test for the explicit `NotImplementedError`. Replace that stub and test
+with real behavior before treating the action as complete.
+
 Preserve an existing import package. For a new project named `order-service`,
 `order_service` is a suitable import package; normalize punctuation and spaces,
 then verify that the result satisfies `str.isidentifier()` and is not a Python

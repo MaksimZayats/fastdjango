@@ -21,6 +21,7 @@ class SpecxRuleId(StrEnum):
     USE_CASES_RETURN_DTOS = "use-cases.return-dtos"
     RESULT_DTO_CLASSES_LIVE_UNDER_SCOPE_DTOS_PACKAGE = "dtos.result-dtos-live-under-dtos"
     USE_CASE_INPUTS_ARE_LOCAL_COMMANDS_OR_QUERIES = "use-cases.inputs-are-local-commands-or-queries"
+    USE_CASE_MODULES_DEFINE_ONE_USE_CASE = "use-cases.one-per-module"
     COMMAND_AND_QUERY_CLASSES_LIVE_WITH_USE_CASES = "use-cases.commands-and-queries-live-local"
     CAPABILITIES_LIVE_IN_EXPECTED_PACKAGES_AND_USE_EXPECTED_SUFFIXES = (
         "capabilities.placement-and-suffix"

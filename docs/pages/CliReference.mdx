@@ -80,12 +80,89 @@ specx rule explain RULE_ID
 The ID must match exactly. Output includes family, default status, required project surface when one
 exists, and the rule's documentation. An unknown ID returns 2 and names the available IDs.
 
+## Project inspection
+
+```text
+specx project [--root ROOT] component list [--output-format {text,json}]
+specx project [--root ROOT] component show COMPONENT [--output-format {text,json}]
+specx project [--root ROOT] use-case list [--component COMPONENT] [--output-format {text,json}]
+specx project [--root ROOT] use-case show COMPONENT/NAME [--output-format {text,json}]
+```
+
+`ROOT` defaults to the nearest current-directory ancestor containing `pyproject.toml`. An explicit
+`--root` applies to every nested command and must appear immediately after `project`. Components are direct packages under
+`src/<package>/core`; use cases are statically discovered beneath each component's `use_cases`
+package. Inspection does not import project code. Text output uses terminal tables and detail panels.
+JSON output has a versioned top-level object containing `version`, the absolute `root`, and the
+requested component or use-case data.
+
+Text output always names the resolved root and explains empty results. Missing IDs and close typos
+show available resources and copyable recovery commands. Install shell completion with
+`specx --install-completion`; component and use-case values complete from project structure even
+while application code is temporarily invalid. `-h` is accepted anywhere that `--help` is.
+
+Use-case IDs derive from structure: `core/playback/use_cases/get_playback_status.py` becomes
+`playback/get-playback-status`. Each managed module must define one use case.
+
+## `specx project use-case create`
+
+```text
+specx project [--root ROOT] use-case create COMPONENT/NAME --kind {command,query}
+  [--input-field NAME:TYPE]... [--result-field NAME:TYPE]... [--sync] [--dry-run]
+  [--output-format {text,json}]
+```
+
+The command creates a same-file command or query, one use case, a separate result DTO, missing empty
+package initializers, and a mirrored unit test. Execution is async unless `--sync` is supplied.
+Supported field types are `str`, `int`, `float`, `bool`, nullable `TYPE?`, and one-level lists such
+as `list[str]`. Field names must be public lowercase snake case. Quote nullable and list field
+arguments in shells, for example `--input-field 'note:str?'` and
+`--result-field 'track_ids:list[str]'`.
+
+The generated action explicitly raises `NotImplementedError`; its temporary test expects that state
+so checks remain green. Replace both with real behavior. The generator validates every destination
+before writing and never overwrites files. A failed write rolls back files created by that attempt.
+`--dry-run` prints the complete file set without writing. JSON output is a deterministic versioned
+manifest containing the root, use-case ID, ordered file actions, and next commands.
+
+## `specx project use-case run`
+
+```text
+specx project [--root ROOT] use-case run COMPONENT/NAME
+  [--input JSON|@FILE|-] [--allow-effects]
+```
+
+The runner imports trusted project code, validates JSON into the discovered command or query,
+resolves the use case from DIWire, supports sync and async `execute`, prints a versioned JSON result,
+and closes the container. Fieldless inputs default to `{}`. `@FILE` reads UTF-8 JSON and `-` reads
+stdin. Relative file paths use the current working directory. Unknown input keys are rejected rather
+than ignored. Use-case `show --output-format json` reports required/default field metadata and a
+sample input object. Commands require `--allow-effects`; queries do not.
+
+Application output is isolated from stdout so stdout remains exactly one result document; captured
+application output is replayed to stderr on success and included in structured failure details.
+Container cleanup failures are reported without hiding an earlier application failure.
+
+## Machine-readable failures
+
+Inspection and scaffold commands automatically render a versioned JSON error on stderr when their
+`--output-format` is `json`. Use `specx project --error-format json ...` to request the same contract
+independently of success output. The runner always uses this contract. Successful JSON stays on
+stdout; failures leave stdout empty and exit 2. Error objects include a stable code, message, hint,
+available values, suggestions, and structured details.
+
+`specx --version` prints the installed version. Typer-level syntax failures such as unknown option
+names retain Typer's standard usage error, command/option typo suggestion, and status 2.
+
+The container factory defaults to `<package>.ioc.container:get_container` and can be overridden in
+`[tool.specx.project]`. This command is not sandboxed and uses the project's current environment.
+
 ## Exit status
 
 | Status | Meaning |
 | --- | --- |
 | `0` | Command completed; checks have no violations. Warnings may exist. |
 | `1` | Architecture check found one or more violations. |
-| `2` | CLI usage, configuration, initialization, syntax, IO, or execution error. |
+| `2` | CLI usage, configuration, initialization, project management, syntax, IO, or execution error. |
 
 <NextPrev current="reference-cli" />

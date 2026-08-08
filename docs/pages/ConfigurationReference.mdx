@@ -19,6 +19,9 @@ ignore = [
 exclude = [
   "src/order_service/generated/**",
 ]
+
+[tool.specx.project]
+container-factory = "order_service.ioc.container:get_container"
 ```
 
 Unknown keys and values of the wrong type are configuration errors.
@@ -32,6 +35,7 @@ Unknown keys and values of the wrong type are configuration errors.
 | `extend-select` | array of strings | Add rules to the current selection. |
 | `ignore` | array of exact rule IDs | Disable selected rules. |
 | `exclude` | array of globs | Skip matching Python paths. |
+| `project` | table | Optional project-management runtime configuration. |
 
 Without `package`, specx requires exactly one importable directory below `src/` that contains Python
 files. Set the key for repositories with multiple packages. One invocation still checks one package;
@@ -71,5 +75,13 @@ The equivalent `SpecxArchitectureConfig` fields are named differently in two pla
 | `extend-select` | `extend_select` |
 
 `extra_rules` is available only in Python configuration. TOML does not import project rule classes.
+
+## Project runtime
+
+`specx project use-case run` defaults to
+`<package>.ioc.container:get_container`. Set `container-factory` under
+`[tool.specx.project]` only when the project uses another import path. The value must use
+`module:symbol` syntax and return a `diwire.Container`. Static list and show commands never import
+the factory or application package.
 
 <NextPrev current="reference-configuration" />

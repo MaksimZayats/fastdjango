@@ -12,26 +12,40 @@ from specx.cli import main
 
 
 def test_cli_help_lists_primary_commands(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as raised:
-        main(["--help"])
+    exit_code = main(["--help"])
 
     output = capsys.readouterr().out
-    assert raised.value.code == 0
+    assert exit_code == 0
     assert "check" in output
     assert "init" in output
+    assert "project" in output
     assert "rule" in output
 
 
 def test_init_help_lists_project_options(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as raised:
-        main(["init", "--help"])
+    exit_code = main(["init", "--help"])
 
     output = capsys.readouterr().out
-    assert raised.value.code == 0
+    assert exit_code == 0
     assert "--name" in output
     assert "--package" in output
     assert "--python" in output
     assert "--no-sync" in output
+
+
+def test_cli_version_nested_short_help_and_project_metavars(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out.strip()
+
+    assert main(["project", "use-case", "create", "-h"]) == 0
+    help_output = capsys.readouterr().out
+    assert "COMPONENT/NAME" in help_output
+    assert "NAME:TYPE" in help_output
+    assert "note:str?" in help_output
+    assert "track_ids:list[str]" in help_output
+    assert "--output-format" in help_output
 
 
 def test_init_creates_neutral_zero_config_project(
@@ -59,6 +73,7 @@ def test_init_creates_neutral_zero_config_project(
     assert pyproject["tool"]["ruff"]["target-version"] == "py314"
     assert pyproject["tool"]["ruff"]["lint"]["select"] == ["ALL"]
     assert "D100" in pyproject["tool"]["ruff"]["lint"]["ignore"]
+    assert "CPY001" in pyproject["tool"]["ruff"]["lint"]["ignore"]
     assert "D203" in pyproject["tool"]["ruff"]["lint"]["ignore"]
     assert pyproject["tool"]["ruff"]["lint"]["per-file-ignores"]["**/__init__.py"] == ["D104"]
     assert pyproject["tool"]["specx"]["select"] == ["ALL"]

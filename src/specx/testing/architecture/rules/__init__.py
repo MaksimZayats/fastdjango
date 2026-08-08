@@ -115,6 +115,9 @@ from .use_cases_inputs_are_local_commands_or_queries import (
 from .use_cases_no_entity_imports_or_returns import (
     UseCasesDoNotImportOrReturnEntitiesRule,
 )
+from .use_cases_one_per_module import (
+    UseCaseModulesDefineOneUseCaseRule,
+)
 from .use_cases_queries_do_not_mutate import (
     QueryUseCasesDoNotCallRepositoryMutatorsRule,
 )
@@ -163,6 +166,7 @@ BUILT_IN_RULES: tuple[type[ArchitectureRuleBase], ...] = (
     UseCasesDoNotInjectRepositoriesOrInfrastructureRule,
     IOCContainerDoesNotRegisterActiveUnitOfWorkRule,
     InitFilesAreEmptyRule,
+    UseCaseModulesDefineOneUseCaseRule,
 )
 
 __all__ = [
@@ -202,6 +206,7 @@ __all__ = [
     "TestFixturesDoNotBundleMocksRule",
     "TestsMirrorSourceStructureRule",
     "UseCaseInputsAreLocalCommandsOrQueriesRule",
+    "UseCaseModulesDefineOneUseCaseRule",
     "UseCasesDoNotImportOrReturnEntitiesRule",
     "UseCasesDoNotInjectRepositoriesOrInfrastructureRule",
     "UseCasesInjectUnitOfWorkManagersRule",

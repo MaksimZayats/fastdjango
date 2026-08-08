@@ -35,6 +35,8 @@ checks with stable, documented rule IDs.
   behavior, FastAPI delivery, DI, persistence, settings, migrations, and tests.
 - **Architecture as code.** `specx check` catches layer leaks, incorrect
   inheritance, hidden transaction ownership, misplaced types, and test drift.
+- **Project management CLI.** Inspect core components, scaffold typed use cases,
+  and run trusted application actions through the project's DI container.
 - **Explicit building blocks.** Typed foundation classes give use cases,
   services, capabilities, controllers, repositories, gateways, and DTOs clear
   roles.
@@ -85,6 +87,21 @@ Inspect the available guardrails from the command line:
 uv run specx rule list
 uv run specx rule explain use-cases.return-dtos
 ```
+
+Explore and run the project's application actions:
+
+```sh
+uv run specx project component list
+uv run specx project use-case list
+uv run specx project use-case show health/check-health
+uv run specx project use-case run health/check-health
+uv run specx project use-case create orders/get-order --kind query --dry-run --output-format json
+```
+
+Project commands find the nearest `pyproject.toml` ancestor by default. Use `--output-format json`
+for stable inspection/scaffold output and `specx project --error-format json ...` for structured
+failures. Missing or mistyped IDs include discovered suggestions; install dynamic completion with
+`specx --install-completion`.
 
 Configuration lives in `pyproject.toml`. See the
 [configuration reference](https://specx.dev/docs/reference/configuration/) and

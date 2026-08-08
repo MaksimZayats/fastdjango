@@ -57,6 +57,12 @@ details, read `references/blueprint.md`.
    SQLAlchemy declarative base.
 15. Add tests only where there is real code to test. Do not create empty folders
    just to satisfy the diagram.
+16. Use `specx project component list --output-format json` and
+   `specx project use-case list --output-format json` to
+   inspect the resulting structure. When a typed application-action scaffold is
+   useful, preview it with
+   `specx project use-case create <scope>/<action> --kind <command|query> --dry-run --output-format json`, then create it and
+   replace its explicit `NotImplementedError` test with behavior tests.
 
 ## Non-Negotiable Boundaries
 
@@ -74,6 +80,8 @@ details, read `references/blueprint.md`.
 - Same-file `BaseCommand` or `BaseQuery` inputs enter use cases, and result DTOs
   leave them. Persistence use cases inject a `UnitOfWorkManager`; services do
   not open or finish transactions.
+- Keep one use case in each module so static management commands can address it
+  as `<scope>/<module>` without importing project code.
 - Prefer frozen, keyword-only, slotted dataclasses for core data and
   `BaseStrEnum` for reusable closed value sets. Keep Pydantic at delivery and
   settings edges.

@@ -40,6 +40,7 @@ import Rule37 from "../rules/uow_use_cases_inject_managers.mdx"
 import Rule38 from "../rules/uow_use_cases_no_direct_repositories_or_infrastructure.mdx"
 import Rule39 from "../rules/uow_ioc_does_not_register_active_uow.mdx"
 import Rule40 from "../rules/packages_init_files_are_empty.mdx"
+import Rule41 from "../rules/use_cases_one_per_module.mdx"
 
 <Meta title="Reference/Architecture rules" />
 
@@ -94,6 +95,7 @@ the installed package. Rules are enabled by default unless their page marks them
 | [`uow.use-cases-no-direct-repositories-or-infrastructure`](#uow_use_cases_no_direct_repositories_or_infrastructure) | Default | Require persistence access to flow through use-case-owned UoW scopes. |
 | [`uow.ioc-does-not-register-active-uow`](#uow_ioc_does_not_register_active_uow) | Default | Reject active unit-of-work registrations in the IOC container. |
 | [`packages.init-files-are-empty`](#packages_init_files_are_empty) | Default | Require package `__init__.py` files to stay empty. |
+| [`use-cases.one-per-module`](#use_cases_one_per_module) | Default | Require each managed use-case module to define only one use case. |
 
 <Rule01 />
 
@@ -174,6 +176,8 @@ the installed package. Rules are enabled by default unless their page marks them
 <Rule39 />
 
 <Rule40 />
+
+<Rule41 />
 
 ## Enforcement boundary
 

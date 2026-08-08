@@ -23,6 +23,12 @@
 - Lint/type/format/architecture check: `make lint`
 - Format/fix: `make format`
 - Tests: `make test`
+- List core components: `uv run --locked specx project component list --output-format json`
+- List use cases: `uv run --locked specx project use-case list --output-format json`
+- Show one use case: `uv run --locked specx project use-case show health/check-health --output-format json`
+- Run a query use case: `uv run --locked specx project use-case run health/check-health`
+- Preview a scaffold: `uv run --locked specx project use-case create <component>/<name> --kind query --dry-run --output-format json`
+- Use `uv run --locked specx project --error-format json ...` when an agent must parse failures.
 
 ## Architecture Rules
 
@@ -30,6 +36,7 @@
 - Resolve application classes from `get_container()` at runtime; core classes never access
   the container directly.
 - Use cases accept one same-file command or query.
+- Keep one use case per module so its management ID stays `<component>/<module>`.
 - Use cases return DTOs, not entities.
 - Query use cases must not call repository mutators.
 - Core services choose `BasePureService`, `BaseReadService`, or `BaseEffectService` and do

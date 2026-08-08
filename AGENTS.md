@@ -22,6 +22,8 @@ and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
 - `src/specx/infrastructure/foundation/` contains infrastructure foundation bases.
 - `src/specx/testing/` contains the public rule-based architecture test API.
 - `src/specx/_internal/` contains package internals that are not public API.
+- `src/specx/_internal/project_management/` implements static discovery,
+  deterministic scaffolding, runtime execution, and terminal presentation.
 - `tests/` validates the `specx` package and skill helper scripts.
 - `scripts/validate_skills.py` validates the skill catalog.
 
@@ -41,6 +43,12 @@ and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
 - Synchronize the local skill mirror: `make sync-skills`
 - List local installable skills: `make list-skills`
 - Inspect local skills manually: `npx skills add . --list --full-depth`
+- Inspect project components: `uv run specx project component list`
+- Inspect project use cases: `uv run specx project use-case list`
+- Prefer `--output-format json` for agent inspection and scaffold dry runs; use
+  `specx project --error-format json ...` when failures must also be parsed.
+- Run `uv run specx project use-case show COMPONENT/NAME --output-format json` before constructing
+  runner input; unknown keys are rejected.
 - Install from GitHub: `npx skills add maksimzayats/specx --skill '*' --agent codex -y`
 
 ## Skill Authoring Rules
@@ -66,6 +74,7 @@ and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
 - Every project class inherits an explicit packaged scoped foundation base or a
   justified project-local foundation extension.
 - Use cases accept exactly one same-file `Command` or `Query` and return DTOs.
+- Keep one use case per module so management IDs remain `<component>/<module>`.
 - Commands, queries, DTOs, entities, and other core data classes use
   `@dataclass(frozen=True, kw_only=True, slots=True)` unless the user asks for
   another model type. Keep Pydantic at delivery schemas and settings edges.
