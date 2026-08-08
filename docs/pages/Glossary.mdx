@@ -26,6 +26,11 @@ act as a repository or gateway.
 A same-file use-case input that requests work allowed to change state. Commands are input contracts,
 not DTOs.
 
+## Component
+
+The project-management name for one structural `core/<scope>/` application area. Components are
+discovered from source layout and do not require manifests or runtime registration.
+
 ## Composition root
 
 The `ioc` and outer runtime code that creates the DIWire container, binds ports to adapters, loads
@@ -61,6 +66,18 @@ language, declares effects, and does not return entities or provider objects.
 A technical implementation of a core repository or gateway port. It owns database, cache, file,
 queue, HTTP, or SDK details.
 
+## Ambient runtime access
+
+Behavior that directly obtains time, randomness, identifiers, environment state, filesystem or
+process state, network results, or similar runtime effects instead of receiving them through an
+explicit capability or gateway.
+
+## Orchestration
+
+Use-case coordination through typed inputs and results, injected collaborators, and a manager-owned
+unit-of-work scope. Use cases may construct typed objects but do not call arbitrary helpers, module
+functions, static methods, or built-ins unless an exact call-policy name approves the call.
+
 ## Query
 
 A same-file use-case input for read-only work. Even an empty query is an explicit input contract.
@@ -84,6 +101,9 @@ technical adapters.
 
 Focused reusable core behavior classified as pure, read, or effect. Services do not own application
 entrypoints or unit-of-work lifecycle.
+
+Services may use deterministic local functions as implementation details. The same direct function
+call is not valid in a use case unless specx recognizes it as a constructor or it is exactly approved.
 
 ## Unit of work
 

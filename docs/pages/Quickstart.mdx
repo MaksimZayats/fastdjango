@@ -10,18 +10,18 @@ import { NextPrev } from "@storybookComponents/NextPrev"
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/). The package declares Python
 3.11 or newer, and the initializer defaults to Python 3.14. Node.js is only needed to install the
-agent skill catalog.
+optional navigation skill.
 
-## Install the skills
+## Optional: install the navigation skill
 
-The following command installs every specx skill for Codex:
+The following command installs the single optional skill for Codex:
 
 ```sh
-npx skills add maksimzayats/specx --skill '*' --agent codex -y
+npx skills add maksimzayats/specx --skill specx --agent codex -y
 ```
 
-Skill installation and Python package installation are separate. The skills teach an agent how to
-work; the package provides the initializer, foundation classes, and checks.
+Skill installation and Python package installation are separate. The package provides the
+initializer, foundation classes, project commands, and enforceable checks.
 
 ## Initialize a project
 
@@ -57,7 +57,7 @@ when the service needs them.
 ## Run the guardrails directly
 
 ```sh
-uv run specx check
+uv run specx check --output-format json
 uv run specx rule list
 uv run specx rule explain use-cases.return-dtos
 ```
@@ -68,14 +68,15 @@ architecture violations exit with status 1, and configuration or execution error
 
 ## Make the first change
 
-Ask the agent for the outcome and name the relevant skill when you know it:
+Ask the agent for the outcome and require the project checks:
 
 ```text
-Use $specx-add-core-use-case to add a read-only quote action under core/orders.
-Return an OrderQuoteDTO and add focused unit tests.
+Add a read-only quote action under core/orders. Return an OrderQuoteDTO, add focused unit tests,
+run `specx check --output-format json`, follow its hints, and finish with `make check`.
 ```
 
-The skill name is optional; include it when a specific workflow must be followed.
+You may mention `$specx` when you want the optional navigation workflow, but correctness never
+depends on skill installation.
 
 Next, [build your first core feature](/docs/tutorial/build-your-first-core-feature/). For
 command and scaffold details, see [CLI](/docs/reference/cli/) and

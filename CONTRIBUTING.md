@@ -1,19 +1,18 @@
 # Contributing
 
-specx is an agent skill catalog plus a typed Python guardrail package. Changes
-usually touch the package and the skills together so future agents learn the
-same architecture that the guardrails enforce.
+specx is a typed Python guardrail package with one optional navigation skill.
+Executable checks and public rule pages own architecture policy; the skill only
+helps an agent find those interfaces.
 
 ## Repository Layout
 
 ```text
-skills/                         # published agent skills
-  specx-*/SKILL.md              # trigger metadata and workflow
-  specx-*/references/*.md       # detailed generation guidance
+skills/specx/                   # optional navigation skill
 .agents/skills/                 # tracked local-discovery mirror
 src/specx/                      # reusable architecture guardrail package
 tests/                          # package and skill-helper tests
 scripts/validate_skills.py      # skill metadata validator
+docs/rules/                     # authoritative built-in rule pages
 AGENTS.md                       # instructions for agents editing this repo
 README.md                       # user-facing catalog overview
 ```
@@ -26,7 +25,7 @@ README.md                       # user-facing catalog overview
 
 ## Root Commands
 
-Validate the Python package, skill catalog, and installable skill list:
+Validate the Python package, optional skill, and installable skill list:
 
 ```sh
 make check
@@ -61,26 +60,25 @@ make list-skills
 
 ## Skill Authoring
 
-Each skill has:
+The single optional skill has:
 
 - `SKILL.md` with YAML frontmatter containing only `name` and `description`.
-- Optional `references/*.md` files for detailed instructions and examples.
 - Optional `agents/openai.yaml` metadata when the skill is meant to surface in
   skill UI lists.
 
-Keep `SKILL.md` concise and trigger-oriented. Put reusable patterns, examples,
-and guardrail details in `references/`. Do not add README-style files inside
-individual skill folders. Add a compact linked `## Contents` section to
-Markdown references over 100 lines. Edit only canonical `skills/`, then run
+Keep `SKILL.md` concise and navigation-oriented. Put reusable patterns,
+examples, rationale, and static-analysis limits in public documentation rather
+than skill references. Edit only canonical `skills/specx/`, then run
 `make sync-skills`; `make validate-skills` rejects mirror drift.
 
 When changing a rule:
 
-1. Update the skill that teaches the rule.
-2. Update cross-cutting references that repeat the rule.
-3. Update `AGENTS.md` if agents need the rule before loading a skill.
-4. Update the package rule and focused tests when enforcement changes.
-5. Run root `make check` and forward-test substantial generation changes in a
+1. Update the package rule and focused positive, negative, aliasing, inheritance,
+   and false-positive tests.
+2. Update the authoritative page under `docs/rules/`, including remediation and
+   static detection limits.
+3. Update generated project guidance only when project commands or entrypoints change.
+4. Run root `make check` and forward-test substantial generation changes in a
    disposable project when practical.
 
 ## Architecture Contract
@@ -169,40 +167,11 @@ Rule-based guardrails live in the `specx` Python package. Each built-in
 architecture check is a concrete `*Rule` subclass with a stable
 `SpecxRuleId` and a useful docstring explaining the rule.
 
-Generated projects should keep a tiny pytest wrapper:
-
-```python
-from pathlib import Path
-
-from specx.testing.architecture import (
-    SpecxArchitectureConfig,
-    SpecxRuleId,
-    assert_specx_architecture,
-)
-
-
-def test_specx_architecture() -> None:
-    disabled_rules: frozenset[SpecxRuleId] = frozenset()
-
-    assert_specx_architecture(
-        SpecxArchitectureConfig(
-            project_root=Path(__file__).resolve().parents[3],
-            package_name="url_shortener_service",
-            disabled_rules=disabled_rules,
-        )
-    )
-```
-
-The compatibility renderer writes that wrapper for existing workflows:
-
-```sh
-python3 skills/specx-tests/references/render_architecture_guardrails.py \
-  --package url_shortener_service \
-  --output /path/to/service/tests/guardrails/architecture/test_boundaries.py
-```
-
-When changing guardrail behavior, update the package rule, its focused tests,
-the compatibility renderer if needed, and any skill docs that teach the rule.
+Generated projects run `specx check`, normally through `make lint` and
+`make check`. Agents should prefer `specx check --output-format json`, follow
+each diagnostic's hint and documentation URL, and use the public Python API only
+for project-specific custom rules. When changing built-in guardrail behavior,
+update the package rule, focused tests, rule metadata, and its public rule page.
 
 ## Migrations
 
@@ -217,8 +186,8 @@ against complete metadata.
 
 - Root `make check` passes.
 - Substantial generated-project changes were forward-tested when practical.
-- Skill references and package guardrails agree on architecture rules.
-- Package architecture rules and the compatibility wrapper renderer agree.
+- Public rule pages and package guardrails agree on architecture rules.
+- Skill discovery finds exactly the one optional `specx` navigation skill.
 - No placeholder folders, local copies of packaged bases, or speculative
   foundation bases were added.
 - No unrelated generated caches or local environment files were committed.

@@ -1,0 +1,38 @@
+export const ruleId = 'sqlalchemy.models-live-under-scope-infrastructure'
+export const summary = 'Place concrete SQLAlchemy models under their owning scope infrastructure package.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="sqlalchemy_models_live_under_scope_infrastructure"></span>
+
+## `sqlalchemy.models-live-under-scope-infrastructure`
+
+Place concrete SQLAlchemy models under their owning scope infrastructure package.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Persistence models are technical details owned by a business scope, while only the declarative foundation base is shared.
+
+### Failing example
+
+```python
+class OrderModel(BaseSQLAlchemyModel):
+    pass  # infrastructure/sqlalchemy/models/order.py
+```
+
+### Passing example
+
+```python
+class OrderModel(BaseSQLAlchemyModel):
+    pass  # core/orders/infrastructure/sqlalchemy/models/order.py
+```
+
+### Detection notes
+
+Follows exact path-qualified project inheritance from `BaseSQLAlchemyModel` and recognizes mapped
+project descendants of SQLAlchemy's `DeclarativeBase`. Statically abstract
+project foundation classes are exempt, but explicit or inherited table mappings and mapped columns
+remain concrete and fail outside scope infrastructure even when a class name starts with `Base`.

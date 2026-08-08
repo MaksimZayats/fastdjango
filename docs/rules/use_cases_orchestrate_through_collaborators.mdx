@@ -1,0 +1,63 @@
+export const ruleId = 'use-cases.orchestrate-through-collaborators'
+export const summary = 'Require use-case execution to orchestrate injected collaborators and typed objects.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="use_cases_orchestrate_through_collaborators"></span>
+
+## `use-cases.orchestrate-through-collaborators`
+
+Require use-case execution to orchestrate injected collaborators and typed objects.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Use cases coordinate application policy; reusable behavior belongs behind typed injected collaborators.
+
+### Failing example
+
+```python
+class PlaceOrderUseCase(BaseUseCase):
+    def execute(self, *, command: PlaceOrderCommand) -> OrderDTO:
+        return build_order(command)
+```
+
+### Passing example
+
+```python
+class PlaceOrderUseCase(BaseUseCase):
+    builder: Injected[OrderBuilderService]
+    def execute(self, *, command: PlaceOrderCommand) -> OrderDTO:
+        return self.builder.build(command=command)
+```
+
+### Detection notes
+
+Checks inherited project methods and resolves definition-time aliases, shadowing, and reachable
+control-flow branches conservatively. Statically indexed project classes, deterministic built-in and
+standard-library value constructors, typed injected collaborator calls, manager-owned UoW calls, and
+exact configured names pass. Project package re-exports and legacy or PEP 695 injected aliases are
+resolved, including quoted `Injected[...]` field annotations. Effective C3 field overrides and field
+reassignment remove injected-field trust. Methods declared under module or class control flow,
+lexically nested foundation subclasses, exact `staticmethod`/`classmethod` attachments of project
+functions or inline lambdas, property getter/setter/deleter components, and the runtime implementation
+behind an overload group are checked. Fresh properties shadow inherited descriptors; qualified
+inherited accessor overrides replace one component and retain the others from the explicitly selected
+property owner,
+including a non-first C3 mixin. Property abstractness follows every effective accessor component.
+Exact `property(...)` assignments also check positional or keyword project-function accessors and inline
+lambda bodies as fresh descriptors. Class-body aliases of the three built-in wrappers are resolved in
+source order. Literal and exact `typing.TYPE_CHECKING` or `typing_extensions.TYPE_CHECKING` conditions
+select the reachable branch, while unknown conditions remain conservatively merged and
+custom-or-built-in bindings are rejected. Plain subclass
+assignments that replace inherited injected fields remove collaborator trust. Calls in dormant nested
+function, class, and lambda bodies are not
+attributed to the enclosing use case; their definition-time expressions are. An injected plain
+`Callable`, including a project type alias or recursively wrapped `Annotated[Callable, ...]`, is still a
+function rather than an architectural collaborator. `Optional`, `Union`, and PEP 604 union composites
+are callable when any viable member is callable. Quoted and imported aliases follow the same rule;
+composites containing only non-callable collaborators remain valid. Unverifiable external constructors
+can be approved by exact qualified name; uppercase
+helper functions do not pass merely because of capitalization. Dynamic dispatch is not inferred.

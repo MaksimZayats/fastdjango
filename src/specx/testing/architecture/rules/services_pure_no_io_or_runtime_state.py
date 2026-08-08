@@ -7,9 +7,9 @@ from specx.testing.architecture.context import (
     PURE_SERVICE_FORBIDDEN_IMPORT_PARTS,
     PURE_SERVICE_FORBIDDEN_IMPORT_ROOTS,
     ArchitectureContext,
-    class_base_name_index,
+    class_definition_base_index,
     class_dependency_annotations,
-    class_has_foundation_base,
+    class_has_foundation_base_at,
     forbidden_dependency_fragments,
     module_has_forbidden_parts,
 )
@@ -32,7 +32,7 @@ class PureServicesDoNotDependOnIOOrRuntimeStateRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.core_service_paths():
             tree = context.tree(path)
             aliases = context.aliases(path)
@@ -40,7 +40,13 @@ class PureServicesDoNotDependOnIOOrRuntimeStateRule(ArchitectureRuleBase):
                 node
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ClassDef)
-                and class_has_foundation_base(node.name, "BasePureService", base_index)
+                and class_has_foundation_base_at(
+                    node,
+                    "BasePureService",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                )
             ]
             if not pure_services:
                 continue

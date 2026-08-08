@@ -4,9 +4,9 @@ import ast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_base_name_index,
+    class_definition_base_index,
     class_suffix_from_base,
-    nearest_foundation_base_names_for_class,
+    nearest_foundation_base_names_for_class_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -27,7 +27,7 @@ class ResultDTOClassesLiveUnderScopeDTOsPackageRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in (context.src_root / "core").glob("*/**/*.py"):
             if path.name == "__init__.py" or path not in context.ast_project.files:
                 continue
@@ -38,9 +38,15 @@ class ResultDTOClassesLiveUnderScopeDTOsPackageRule(ArchitectureRuleBase):
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
                     continue
-                nearest_bases = nearest_foundation_base_names_for_class(node.name, base_index)
+                nearest_bases = nearest_foundation_base_names_for_class_at(
+                    node,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                )
                 is_dto = any(
-                    class_suffix_from_base(found_base) == "DTO" for found_base in nearest_bases
+                    class_suffix_from_base(found_base.rsplit(".", maxsplit=1)[-1]) == "DTO"
+                    for found_base in nearest_bases
                 )
                 if is_dto and relative_parts[1] != "dtos":
                     violations.append(

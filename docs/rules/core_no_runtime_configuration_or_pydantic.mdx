@@ -1,0 +1,45 @@
+export const ruleId = 'core.no-runtime-configuration-or-pydantic'
+export const summary = 'Keep Pydantic and runtime configuration objects outside the project core layer.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="core_no_runtime_configuration_or_pydantic"></span>
+
+## `core.no-runtime-configuration-or-pydantic`
+
+Keep Pydantic and runtime configuration objects outside the project core layer.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Core code should receive typed values or collaborators rather than coupling behavior to deployment configuration parsing.
+
+### Failing example
+
+```python
+from pydantic_settings import BaseSettings
+class BillingSettings(BaseSettings):
+    endpoint: str
+```
+
+### Passing example
+
+```python
+class BillingService(BaseEffectService):
+    gateway: Injected[BillingGateway]
+```
+
+### Detection notes
+
+Checks every Python file beneath `core/`, including `__init__.py`, for direct Pydantic/settings
+imports and runtime references to project types with exact Pydantic `BaseModel` or `RootModel`,
+Pydantic dataclass decoration, Pydantic Settings `BaseSettings`, or specx runtime-settings ancestry.
+Module-qualified calls, quoted forward annotations, neutral project re-exports, and construction count.
+Project aliases remain forbidden when union, generic, `Annotated`, quoted, or recursively re-exported
+payloads contain one of those types. Pure domain aliases and unrelated string values pass. Unrelated
+project classes that merely share a base name or use the standard-library dataclass decorator do not.
+A pure project module is not rejected merely because its qualified name contains `settings`; exact
+forbidden types and runtime-settings objects remain rejected. Behavior-method environment calls belong
+to `core.behavior-no-ambient-runtime-access` so one source location has one diagnostic owner.

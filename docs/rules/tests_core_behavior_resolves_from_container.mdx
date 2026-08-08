@@ -1,0 +1,55 @@
+export const ruleId = 'tests.core-behavior-resolves-from-container'
+export const summary = 'Require mirrored core-behavior tests to resolve every concrete target from DIWire.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="tests_core_behavior_resolves_from_container"></span>
+
+## `tests.core-behavior-resolves-from-container`
+
+Require mirrored core-behavior tests to resolve every concrete target from DIWire.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Resolving each concrete behavior proves its constructor graph is registered without prescribing test counts or assertions.
+
+### Failing example
+
+```python
+def test_total() -> None:
+    service = PriceService()
+```
+
+### Passing example
+
+```python
+def test_total(container: Container) -> None:
+    service = container.resolve(PriceService)
+```
+
+### Detection notes
+
+Checks each required mirrored unit module for a `test_` function using the exact native `container`
+fixture from `tests/unit/conftest.py`. Every reachable return or yield from that fixture must call the
+project `get_container()` directly. Local or nearer fixtures, including
+`@pytest.fixture(name="container")`, and parameter reassignment invalidate the proof. Every exact
+path-qualified concrete target needs a call in the executable test body; dead branches, nested scopes,
+parametrized/defaulted shadows, function/module/class-level skipped or unconditional xfailed tests,
+runtime `pytest.skip()` or `pytest.xfail()` termination, short-circuited expressions, swallowed
+failures, suppressed exceptions, patched resolve methods, and un-awaited `aresolve` calls do not
+count. Reachable module-import calls to `pytest.skip()`, `pytest.xfail()`, or
+`pytest.importorskip()` invalidate the module's evidence, including calls executed in class bodies,
+function decorators and defaults, and lambda defaults. Unknown boolean and conditional-expression
+branches retain every reachable outcome, while statically dead and short-circuited calls do not.
+The outermost iterable of a comprehension executes immediately; its body, filters, and inner
+iterables remain deferred. Deferred function and lambda bodies are not executed during import. An
+`except Exception` handler does not catch pytest outcome termination; a bare handler or one that
+explicitly catches `BaseException` does, both at module import and inside tests. A compatible handler
+consumes the caught outcome, while its `finally` block still runs and may introduce a new terminal
+outcome. Class-scoped container fixtures shadow only tests in their owning class hierarchy, while
+module fixtures shadow the whole module. Conditional xfail marks known statically false, reachable
+conditional expressions, and handlers that re-raise remain valid evidence. Classes that retain
+inherited abstract methods are not resolution targets.

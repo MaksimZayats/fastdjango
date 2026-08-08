@@ -1,4 +1,0 @@
-interface:
-  display_name: "specx Foundation"
-  short_description: "Use packaged or local foundation bases"
-  default_prompt: "Use $specx-foundation to apply packaged stateless specx foundation bases or add a justified project-local extension."

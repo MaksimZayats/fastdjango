@@ -9,22 +9,19 @@ import { NextPrev } from "@storybookComponents/NextPrev"
 ## Prerequisites
 
 Choose one application action and write down its input, result, known failures, and whether it reads,
-writes, or calls an external system. Work inside one existing `core/<scope>/` package. Install the
-specx skills before asking an agent to make the change.
+writes, or calls an external system. Work inside one existing `core/<scope>/` package.
 
 ## 1. Describe the application action
 
 ```text
-Use $specx-add-core-use-case, $specx-add-core-service, and $specx-tests.
-
 Add QuoteOrderUseCase to the orders scope. It accepts one QuoteOrderQuery with subtotal_pence,
 uses an OrderPricingService to apply the deterministic pricing policy, and returns OrderQuoteDTO.
 Reject a negative subtotal with a named application value error. Add focused unit tests for the
-service and use case. Run the architecture checker and the relevant tests.
+service and use case. Run `specx check --output-format json`, follow its hints, and run the relevant tests.
 ```
 
 Specify the business inputs, result, named failures, and effects. Name a class category only when it
-is part of the requested design; otherwise let the selected skills derive placement and test layout.
+is part of the requested design; otherwise inspect the project and use the public guides and checks.
 
 ## 2. Verify the core files
 

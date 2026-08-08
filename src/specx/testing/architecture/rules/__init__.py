@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from ._shared import ArchitectureRuleBase
-from .agents_md_documents_commands_and_boundaries import (
-    RootAgentsMDDocumentsProjectCommandsAndBoundariesRule,
+from .agents_md_documents_project_commands import (
+    RootAgentsMDDocumentsProjectCommandsRule,
 )
 from .capabilities_no_workflows_or_port_roles import (
     CapabilitiesDoNotOwnWorkflowsOrOtherPortRolesRule,
@@ -22,8 +22,17 @@ from .classes_require_explicit_bases import (
 from .classes_suffix_from_foundation_category import (
     ClassesUseSuffixFromMostSpecificFoundationCategoryRule,
 )
+from .core_behavior_no_ambient_runtime_access import (
+    CoreBehaviorNoAmbientRuntimeAccessRule,
+)
+from .core_contracts_use_immutable_dataclasses import (
+    CoreContractsUseImmutableDataclassesRule,
+)
 from .core_inner_packages_no_outer_layers_or_io_libraries import (
     CoreInnerPackagesDoNotImportOuterLayersOrIOLibrariesRule,
+)
+from .core_no_runtime_configuration_or_pydantic import (
+    CoreNoRuntimeConfigurationOrPydanticRule,
 )
 from .core_no_scope_delivery_packages import (
     CoreDoesNotContainDeliveryPackagesRule,
@@ -34,17 +43,21 @@ from .core_scope_infrastructure_does_not_import_delivery import (
 from .delivery_controllers_do_not_import_infrastructure import (
     DeliveryControllersDoNotImportInfrastructureRule,
 )
+from .delivery_foundation_classes_live_under_delivery import (
+    DeliveryFoundationClassesLiveUnderDeliveryRule,
+)
 from .delivery_routes_use_full_api_v1_paths import (
     PublicRoutesUseFullAPIV1PathsRule,
 )
 from .diwire_container_import_boundary import (
     OnlyIOCDeliveryAppAndTestsImportContainerRule,
 )
+from .diwire_no_function_injection import DIWireNoFunctionInjectionRule
 from .dtos_result_dtos_live_under_dtos import (
     ResultDTOClassesLiveUnderScopeDTOsPackageRule,
 )
-from .fastapi_agents_md_documents_delivery import (
-    FastAPIRootAgentsMDDocumentsDeliveryRule,
+from .fastapi_agents_md_documents_entrypoint import (
+    FastAPIRootAgentsMDDocumentsEntrypointRule,
 )
 from .foundation_imports_use_scoped_packages import (
     FoundationImportsUseScopedPackagesRule,
@@ -64,6 +77,9 @@ from .packages_init_files_are_empty import (
 from .services_effect_no_owned_transactions_or_delivery import (
     EffectServicesDoNotOwnTransactionsOrImportDeliveryRule,
 )
+from .services_methods_use_keyword_only_arguments import (
+    ServiceMethodsUseKeywordOnlyArgumentsRule,
+)
 from .services_no_generic_base_service import (
     GenericBaseServiceIsNotUsedRule,
 )
@@ -79,8 +95,15 @@ from .services_require_effect_specific_bases import (
 from .services_require_service_suffix import (
     ServiceClassesUseServiceSuffixRule,
 )
+from .sqlalchemy_models_live_under_scope_infrastructure import (
+    SQLAlchemyModelsLiveUnderScopeInfrastructureRule,
+)
+from .sqlalchemy_models_require_alembic import SQLAlchemyModelsRequireAlembicRule
 from .sqlalchemy_no_schema_bootstrap_calls import (
     NoSchemaBootstrapCallsInSourceOrTestsRule,
+)
+from .tests_core_behavior_resolves_from_container import (
+    TestsCoreBehaviorResolvesFromContainerRule,
 )
 from .tests_fixtures_do_not_bundle_mocks import (
     TestFixturesDoNotBundleMocksRule,
@@ -115,6 +138,12 @@ from .use_cases_inputs_are_local_commands_or_queries import (
 from .use_cases_no_entity_imports_or_returns import (
     UseCasesDoNotImportOrReturnEntitiesRule,
 )
+from .use_cases_one_per_module import (
+    UseCaseModulesDefineOneUseCaseRule,
+)
+from .use_cases_orchestrate_through_collaborators import (
+    UseCasesOrchestrateThroughCollaboratorsRule,
+)
 from .use_cases_queries_do_not_mutate import (
     QueryUseCasesDoNotCallRepositoryMutatorsRule,
 )
@@ -132,6 +161,10 @@ BUILT_IN_RULES: tuple[type[ArchitectureRuleBase], ...] = (
     UseCasesReturnDTOsRule,
     ResultDTOClassesLiveUnderScopeDTOsPackageRule,
     UseCaseInputsAreLocalCommandsOrQueriesRule,
+    UseCasesOrchestrateThroughCollaboratorsRule,
+    CoreBehaviorNoAmbientRuntimeAccessRule,
+    CoreContractsUseImmutableDataclassesRule,
+    CoreNoRuntimeConfigurationOrPydanticRule,
     CommandAndQueryClassesLiveWithUseCasesRule,
     CapabilitiesLiveInExpectedPackagesAndUseExpectedSuffixesRule,
     CapabilitiesDoNotOwnWorkflowsOrOtherPortRolesRule,
@@ -143,18 +176,24 @@ BUILT_IN_RULES: tuple[type[ArchitectureRuleBase], ...] = (
     ServiceClassesUseServiceSuffixRule,
     CoreServicesUseEffectSpecificServiceBasesRule,
     GenericBaseServiceIsNotUsedRule,
+    ServiceMethodsUseKeywordOnlyArgumentsRule,
     PureServicesDoNotDependOnIOOrRuntimeStateRule,
     ReadServicesDoNotPerformWritesOrOwnTransactionsRule,
     EffectServicesDoNotOwnTransactionsOrImportDeliveryRule,
     ClassesUseSuffixFromMostSpecificFoundationCategoryRule,
     NonFoundationClassesDoNotUseRawCommonBasesRule,
     OnlyIOCDeliveryAppAndTestsImportContainerRule,
+    DIWireNoFunctionInjectionRule,
     LoggingDoesNotInjectLoggersRule,
     PublicRoutesUseFullAPIV1PathsRule,
     NoSchemaBootstrapCallsInSourceOrTestsRule,
-    RootAgentsMDDocumentsProjectCommandsAndBoundariesRule,
-    FastAPIRootAgentsMDDocumentsDeliveryRule,
+    SQLAlchemyModelsLiveUnderScopeInfrastructureRule,
+    SQLAlchemyModelsRequireAlembicRule,
+    DeliveryFoundationClassesLiveUnderDeliveryRule,
+    RootAgentsMDDocumentsProjectCommandsRule,
+    FastAPIRootAgentsMDDocumentsEntrypointRule,
     TestsMirrorSourceStructureRule,
+    TestsCoreBehaviorResolvesFromContainerRule,
     TestFixturesDoNotBundleMocksRule,
     IntegrationTestsDoNotMockInternalCollaboratorsRule,
     ServicesDoNotOpenUnitOfWorkScopesRule,
@@ -163,6 +202,7 @@ BUILT_IN_RULES: tuple[type[ArchitectureRuleBase], ...] = (
     UseCasesDoNotInjectRepositoriesOrInfrastructureRule,
     IOCContainerDoesNotRegisterActiveUnitOfWorkRule,
     InitFilesAreEmptyRule,
+    UseCaseModulesDefineOneUseCaseRule,
 )
 
 __all__ = [
@@ -172,12 +212,17 @@ __all__ = [
     "ClassesRequireExampleDocstringsRule",
     "ClassesUseSuffixFromMostSpecificFoundationCategoryRule",
     "CommandAndQueryClassesLiveWithUseCasesRule",
+    "CoreBehaviorNoAmbientRuntimeAccessRule",
+    "CoreContractsUseImmutableDataclassesRule",
     "CoreDoesNotContainDeliveryPackagesRule",
     "CoreInnerPackagesDoNotImportOuterLayersOrIOLibrariesRule",
+    "CoreNoRuntimeConfigurationOrPydanticRule",
     "CoreServicesUseEffectSpecificServiceBasesRule",
+    "DIWireNoFunctionInjectionRule",
     "DeliveryControllersDoNotImportInfrastructureRule",
+    "DeliveryFoundationClassesLiveUnderDeliveryRule",
     "EffectServicesDoNotOwnTransactionsOrImportDeliveryRule",
-    "FastAPIRootAgentsMDDocumentsDeliveryRule",
+    "FastAPIRootAgentsMDDocumentsEntrypointRule",
     "FoundationImportsUseScopedPackagesRule",
     "GatewayPortsAndImplementationsLiveInExpectedPackagesRule",
     "GatewaysDeclareExternalEffectsAndDoNotReturnEntitiesRule",
@@ -195,16 +240,22 @@ __all__ = [
     "QueryUseCasesDoNotCallRepositoryMutatorsRule",
     "ReadServicesDoNotPerformWritesOrOwnTransactionsRule",
     "ResultDTOClassesLiveUnderScopeDTOsPackageRule",
-    "RootAgentsMDDocumentsProjectCommandsAndBoundariesRule",
+    "RootAgentsMDDocumentsProjectCommandsRule",
+    "SQLAlchemyModelsLiveUnderScopeInfrastructureRule",
+    "SQLAlchemyModelsRequireAlembicRule",
     "ScopeInfrastructureDoesNotImportDeliveryRule",
     "ServiceClassesUseServiceSuffixRule",
+    "ServiceMethodsUseKeywordOnlyArgumentsRule",
     "ServicesDoNotOpenUnitOfWorkScopesRule",
     "TestFixturesDoNotBundleMocksRule",
+    "TestsCoreBehaviorResolvesFromContainerRule",
     "TestsMirrorSourceStructureRule",
     "UseCaseInputsAreLocalCommandsOrQueriesRule",
+    "UseCaseModulesDefineOneUseCaseRule",
     "UseCasesDoNotImportOrReturnEntitiesRule",
     "UseCasesDoNotInjectRepositoriesOrInfrastructureRule",
     "UseCasesInjectUnitOfWorkManagersRule",
     "UseCasesOpenAtMostOneUnitOfWorkScopeRule",
+    "UseCasesOrchestrateThroughCollaboratorsRule",
     "UseCasesReturnDTOsRule",
 ]

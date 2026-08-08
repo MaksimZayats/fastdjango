@@ -20,7 +20,9 @@ dependencies = [
     "diwire>=1.4.2",
     "pydantic>=2.13.0",
     "pydantic-settings>=2.14.0",
+    "rich>=14.0.0",
     "sqlalchemy>=2.0.0",
+    "typer>=0.20.0",
 ]
 classifiers = [
     "Framework :: Pytest",

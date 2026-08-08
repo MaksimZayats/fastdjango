@@ -1,0 +1,65 @@
+export const ruleId = 'core.behavior-no-ambient-runtime-access'
+export const summary = 'Prevent use cases and services from obtaining ambient runtime behavior directly.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="core_behavior_no_ambient_runtime_access"></span>
+
+## `core.behavior-no-ambient-runtime-access`
+
+Prevent use cases and services from obtaining ambient runtime behavior directly.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Time, randomness, IDs, environment, IO, processes, and networks make core behavior nondeterministic unless modeled as dependencies.
+
+### Failing example
+
+```python
+class TokenService(BaseEffectService):
+    def create(self) -> str:
+        return uuid.uuid4().hex
+```
+
+### Passing example
+
+```python
+class TokenService(BaseEffectService):
+    generator: Injected[TokenGeneratorCapability]
+    def create(self) -> str:
+        return self.generator.create()
+```
+
+### Detection notes
+
+Checks methods inherited through project bases and mixins. It recognizes documented standard-library
+and client effect APIs through conservative branch-aware aliases, including environment, process,
+locale, timezone, network, and filesystem calls, ambient values such as `sys.argv`, and typed or
+derived `pathlib.Path` values. Path checks require exact `pathlib` constructor or annotation provenance,
+so unrelated project names containing `pathlib` and deterministic string operations on `path.name` are
+not treated as filesystem access. Inline derived paths such as `(root / "child").read_text()` retain
+their provenance. Low-level descriptor IO, asyncio connection and server creation, runtime
+clocks, and OS-derived UUID/node identifiers are included. Local-time conversions such as no-timezone
+`fromtimestamp()` and `astimezone()` on typed datetime values are ambient; conversions with an explicit
+timezone remain deterministic. Walrus aliases and ambient callable parameter defaults participate in
+reaching-flow analysis: a definite reassignment removes the default's provenance, while a conditional
+reassignment remains conservative. Effective methods follow Python C3 inheritance, including
+class-control-flow, project functions and inline lambdas attached through exact `staticmethod` or
+`classmethod` wrappers, and the effective getter, setter, and deleter components of properties. A fresh
+property shadows the inherited descriptor, while a qualified
+`@Base.property.getter`, `setter`, or `deleter` override replaces only that component and preserves
+components from the explicitly selected owner, including a non-first C3 mixin. A property remains
+abstract when any effective accessor is abstract; concrete component overrides update that status.
+Exact `property(...)` assignments map positional or `fget`/`fset`/`fdel` project functions and inline
+lambdas to the same accessor model and create a fresh descriptor shadow. Class-body aliases of
+`property`, `staticmethod`, and `classmethod` are followed in source order; a custom shadow or a
+control-flow-ambiguous wrapper is not treated as the corresponding built-in. Literal conditions and
+exact `typing.TYPE_CHECKING` or `typing_extensions.TYPE_CHECKING` sentinels select their reachable
+branch; unknown conditions remain merged.
+Inherited behavior has one diagnostic owner. Statically called nested
+and module-local helper bodies are followed. Dormant nested function, class, and lambda bodies are not
+attributed to the enclosing behavior; their definition-time expressions are. Project-specific wrappers
+and fully dynamic dispatch still require review.

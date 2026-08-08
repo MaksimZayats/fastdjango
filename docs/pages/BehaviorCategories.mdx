@@ -56,7 +56,10 @@ Ask these questions in order:
 5. Is it an outbound business capability supplied by another system? Use a gateway port.
 6. Is it only transport behavior? Keep it in delivery.
 
-Plain local functions remain appropriate for implementation details that do not need injection or a
-project class category.
+Plain deterministic local functions remain appropriate inside services when they do not need
+injection or a project class category. Use cases orchestrate injected collaborators and typed
+objects; a direct function call there needs an exact
+`[tool.specx.call-policy].extend-allowed-functions` entry. Time, randomness, IDs, environment,
+filesystem, process, and network access always move behind a capability or gateway.
 
 <NextPrev current="concepts-use-cases-services-and-capabilities" />

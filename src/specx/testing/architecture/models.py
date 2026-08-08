@@ -30,6 +30,10 @@ def empty_rule_selectors() -> frozenset[str]:
     return frozenset()
 
 
+def empty_allowed_functions() -> frozenset[str]:
+    return frozenset()
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class SpecxArchitectureViolation:
     """One architecture rule violation found in a project."""
@@ -40,6 +44,8 @@ class SpecxArchitectureViolation:
     symbol: str | None = None
     line: int | None = None
     column: int | None = None
+    hint: str | None = None
+    documentation_url: str | None = None
 
     def format(self, *, project_root: Path) -> str:
         location = ""
@@ -63,6 +69,8 @@ class SpecxArchitectureWarning:
     path: Path | None = None
     line: int | None = None
     column: int | None = None
+    hint: str | None = None
+    documentation_url: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -86,6 +94,10 @@ class SpecxArchitectureReport:
             lines.append("specx architecture warnings:")
             for warning in self.warnings:
                 lines.append(f"- {warning.rule_id}: {warning.message}")
+                if warning.hint is not None:
+                    lines.append(f"  help: {warning.hint}")
+                if warning.documentation_url is not None:
+                    lines.append(f"  docs: {warning.documentation_url}")
 
         if not self.violations:
             lines.append("specx architecture checks passed.")
@@ -100,6 +112,10 @@ class SpecxArchitectureReport:
             lines.append(f"- {rule_id}")
             for violation in grouped[rule_id]:
                 lines.append(f"  - {violation.format(project_root=self.project_root)}")
+                if violation.hint is not None:
+                    lines.append(f"    help: {violation.hint}")
+                if violation.documentation_url is not None:
+                    lines.append(f"    docs: {violation.documentation_url}")
         return "\n".join(lines)
 
 
@@ -122,6 +138,7 @@ class SpecxArchitectureConfig:
     disabled_rules: frozenset[RuleIdentifier] = field(default_factory=empty_disabled_rules)
     extra_rules: tuple[ArchitectureRuleType, ...] = ()
     path_exclusions: tuple[str, ...] = ()
+    allowed_use_case_functions: frozenset[str] = field(default_factory=empty_allowed_functions)
 
     def __post_init__(self) -> None:
         if not self.package_name.isidentifier() or keyword.iskeyword(self.package_name):
@@ -132,3 +149,20 @@ class SpecxArchitectureConfig:
 
         normalized_root = self.project_root.expanduser()
         object.__setattr__(self, "project_root", normalized_root)
+        malformed = sorted(
+            name for name in self.allowed_use_case_functions if not _is_qualified_name(name)
+        )
+        if malformed:
+            raise SpecxConfigurationError(
+                "allowed_use_case_functions must contain exact dotted Python names; "
+                f"invalid values: {malformed}"
+            )
+
+
+def _is_qualified_name(value: str) -> bool:
+    parts = value.split(".")
+    return (
+        len(parts) >= 2
+        and all(part.isidentifier() and not keyword.iskeyword(part) for part in parts)
+        and "*" not in value
+    )

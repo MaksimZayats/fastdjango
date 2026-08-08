@@ -5,8 +5,8 @@ import ast
 from specx.testing.architecture.context import (
     ArchitectureContext,
     annotation_name,
-    class_base_name_index,
-    class_has_foundation_base,
+    class_definition_base_index,
+    class_has_foundation_base_at,
     declares_external_effect,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
@@ -28,14 +28,20 @@ class GatewaysDeclareExternalEffectsAndDoNotReturnEntitiesRule(ArchitectureRuleB
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.core_paths():
             tree = context.tree(path)
             aliases = context.aliases(path)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
                     continue
-                if not class_has_foundation_base(node.name, "BaseGateway", base_index):
+                if not class_has_foundation_base_at(
+                    node,
+                    "BaseGateway",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                ):
                     continue
                 if not declares_external_effect(node):
                     violations.append(

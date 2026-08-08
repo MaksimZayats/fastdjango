@@ -55,6 +55,11 @@ def check_specx_architecture(config: SpecxArchitectureConfig) -> SpecxArchitectu
                                 f"src/{config.package_name}/{metadata.required_project_surface}"
                             ),
                             path=surface,
+                            hint=(
+                                "Add the selected technology surface or remove the explicit "
+                                f"{metadata.family!r} selector."
+                            ),
+                            documentation_url=metadata.documentation_url,
                         )
                     )
                     warned_families.add(metadata.family)
@@ -62,7 +67,12 @@ def check_specx_architecture(config: SpecxArchitectureConfig) -> SpecxArchitectu
 
         rule = rule_type()
         violations.extend(
-            _with_source_location(violation, context=context) for violation in rule.check(context)
+            _with_rule_guidance(
+                _with_source_location(violation, context=context),
+                hint=metadata.remediation,
+                documentation_url=metadata.documentation_url,
+            )
+            for violation in rule.check(context)
         )
 
     return SpecxArchitectureReport(
@@ -117,4 +127,17 @@ def _with_source_location(
         violation,
         line=node.lineno,
         column=node.col_offset + 1,
+    )
+
+
+def _with_rule_guidance(
+    violation: SpecxArchitectureViolation,
+    *,
+    hint: str | None,
+    documentation_url: str | None,
+) -> SpecxArchitectureViolation:
+    return replace(
+        violation,
+        hint=violation.hint or hint,
+        documentation_url=violation.documentation_url or documentation_url,
     )

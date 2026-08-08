@@ -131,8 +131,11 @@ READ_REPOSITORY_METHOD_PREFIXES = (
     "search_by_",
 )
 SCHEMA_BOOTSTRAP_METHOD_NAMES = {"create_all", "drop_all"}
-MAKE_COMMAND_PATTERN = re.compile(r"`make\s+([a-zA-Z0-9_.-]+)(?:\s|`)")
-MAKE_TARGET_PATTERN = re.compile(r"^([a-zA-Z0-9_.-]+):(?:\s|$)", re.MULTILINE)
+MAKE_COMMAND_PATTERN = re.compile(r"(?<![a-zA-Z0-9_-])make\s+([a-zA-Z0-9_.-]+)\b")
+MAKE_TARGET_PATTERN = re.compile(
+    r"^([a-zA-Z0-9_.-]+(?:[ \t]+[a-zA-Z0-9_.-]+)*):(?:\s|$)",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -189,10 +192,99 @@ class ArchitectureContext:
             return set()
         text = path.read_text(encoding="utf-8")
         return {
-            match.group(1)
+            target
             for match in MAKE_TARGET_PATTERN.finditer(text)
-            if not match.group(1).startswith(".")
+            for target in match.group(1).split()
+            if not target.startswith(".")
         }
+
+    def makefile_target_recipes(self) -> dict[str, str]:
+        """Return each public Make target and its recipe/body text."""
+
+        path = self.project_root / "Makefile"
+        if not path.exists():
+            return {}
+        recipes: dict[str, list[str]] = {}
+        current_targets: tuple[str, ...] = ()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = MAKE_TARGET_PATTERN.match(line)
+            if match is not None:
+                current_targets = tuple(
+                    target
+                    for target in line.split(":", maxsplit=1)[0].split()
+                    if not target.startswith(".")
+                )
+                for target in current_targets:
+                    recipes.setdefault(target, [])
+                continue
+            for target in current_targets:
+                recipes[target].append(line)
+        return {target: "\n".join(lines).rstrip() for target, lines in recipes.items()}
+
+    def qualified_name(self, path: Path, expression: ast.expr | None) -> str:
+        """Resolve an imported alias or lexically local symbol to a qualified name."""
+
+        chain = attribute_chain(expression)
+        if not chain:
+            return ast.unparse(expression) if expression is not None else ""
+        bindings = qualified_symbol_bindings(self, path, at_node=expression)
+        raw = ".".join((bindings.get(chain[0], chain[0]), *chain[1:]))
+        canonical = self._canonical_reexport_names(frozenset({raw}))
+        return next(iter(canonical)) if len(canonical) == 1 else raw
+
+    def qualified_names(self, path: Path, expression: ast.expr | None) -> frozenset[str]:
+        """Resolve every conservatively reachable qualified name for an expression."""
+
+        chain = attribute_chain(expression)
+        if not chain:
+            return frozenset({ast.unparse(expression) if expression is not None else ""})
+        bindings = qualified_symbol_binding_choices(self, path, at_node=expression)
+        roots = bindings.get(chain[0], frozenset({chain[0]}))
+        return self._canonical_reexport_names(
+            frozenset(".".join((root, *chain[1:])) for root in roots)
+        )
+
+    def _canonical_reexport_names(self, names: frozenset[str]) -> frozenset[str]:
+        current = names
+        for _iteration in range(10):
+            replacements: dict[str, str] = {}
+            for init_path in (
+                path
+                for path in self.ast_project.files
+                if path.name == "__init__.py" and path.is_relative_to(self.src_root)
+            ):
+                relative_parent = init_path.relative_to(self.src_root).parent
+                package_module = ".".join(
+                    (self.config.package_name, *relative_parent.parts)
+                ).rstrip(".")
+                module_name = f"{package_module}.__init__"
+                for statement in self.tree(init_path).body:
+                    if not isinstance(statement, ast.ImportFrom):
+                        continue
+                    imported_module = _imported_module_name(
+                        statement,
+                        module_name=module_name,
+                    )
+                    for alias in statement.names:
+                        if alias.name == "*":
+                            continue
+                        exported = f"{package_module}.{alias.asname or alias.name}"
+                        replacements[exported] = f"{imported_module}.{alias.name}"
+            updated = frozenset(
+                next(
+                    (
+                        f"{target}{name.removeprefix(exported)}"
+                        for exported, target in replacements.items()
+                        if name == exported or name.startswith(f"{exported}.")
+                    ),
+                    name,
+                )
+                for name in current
+            )
+            if updated == current:
+                return current
+            current = updated
+        return current
 
 
 def documented_make_targets(text: str) -> set[str]:
@@ -365,9 +457,10 @@ def uow_manager_context_count(
 def injected_type_name(annotation: ast.expr | None, aliases: dict[str, str]) -> str:
     if annotation is None:
         return ""
-    if isinstance(annotation, ast.Subscript) and annotation_name(
-        annotation.value, aliases
-    ).endswith("Injected"):
+    if (
+        isinstance(annotation, ast.Subscript)
+        and annotation_name(annotation.value, aliases) == "Injected"
+    ):
         return annotation_name(annotation.slice, aliases)
     return ""
 
@@ -582,6 +675,387 @@ def class_definition_base_index(
     return {name: tuple(definitions) for name, definitions in mutable_index.items()}
 
 
+def class_has_foundation_base_at(
+    node: ast.ClassDef,
+    base: str,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> bool:
+    """Return whether one path-qualified class inherits a foundation base."""
+
+    return class_has_foundation_base_from_path(
+        node.name,
+        base,
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+    )
+
+
+def nearest_foundation_base_names_for_class_at(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> set[str]:
+    """Return the nearest recognized foundation bases for one exact class."""
+
+    return _nearest_foundation_base_names_from_path(
+        node.name,
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+        visited=set(),
+    )
+
+
+def category_suffix_from_base_at(
+    base: str,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> str | None:
+    """Return a category suffix using path-qualified capability ancestry."""
+
+    leaf = base.rsplit(".", maxsplit=1)[-1]
+    if leaf == "BaseCapability":
+        return "Capability"
+    if leaf.startswith("Base") and class_has_foundation_base_from_path(
+        base,
+        "BaseCapability",
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+    ):
+        return leaf.removeprefix("Base")
+    return class_suffix_from_base(leaf)
+
+
+def _nearest_foundation_base_names_from_path(
+    class_name: str,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+    visited: set[tuple[Path, str]],
+) -> set[str]:
+    nearest: set[str] = set()
+    for candidate_path, base_names in _class_definition_candidates(
+        class_name,
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+    ):
+        visit_key = (candidate_path, class_name)
+        if visit_key in visited:
+            continue
+        direct = {
+            found_base
+            for found_base in base_names
+            if class_suffix_from_base(found_base.rsplit(".", maxsplit=1)[-1]) is not None
+        }
+        if direct:
+            nearest.update(direct)
+            continue
+        for found_base in base_names:
+            nearest.update(
+                _nearest_foundation_base_names_from_path(
+                    found_base,
+                    source_path=candidate_path,
+                    context=context,
+                    definition_index=definition_index,
+                    visited={*visited, visit_key},
+                )
+            )
+    return nearest
+
+
+def qualified_class_name(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> str:
+    """Return the importable qualified name of a project class."""
+
+    return f"{_source_module_name(source_path, context)}.{node.name}"
+
+
+def project_class_qualified_names(context: ArchitectureContext) -> frozenset[str]:
+    """Return every statically declared project class by qualified name."""
+
+    return frozenset(
+        qualified_class_name(node, source_path=path, context=context)
+        for path in context.source_paths()
+        for node in module_scope_class_nodes(context.tree(path))
+    )
+
+
+def module_scope_class_nodes(tree: ast.Module) -> tuple[ast.ClassDef, ...]:
+    """Return classes bound in module scope, including control-flow declarations."""
+
+    classes: list[ast.ClassDef] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.ClassDef):
+            classes.append(node)
+            return
+        if node is not tree and isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(tree)
+    return tuple(classes)
+
+
+def class_is_statically_abstract_at(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    """Recognize abstract project classes using path-qualified ancestry."""
+
+    relative_parts = source_path.relative_to(context.src_root).parts
+    if (
+        "foundation" in relative_parts
+        and len(node.name) > 4
+        and node.name.startswith("Base")
+        and node.name[4].isupper()
+    ):
+        return True
+    if _declares_explicit_abstract_class(
+        node,
+        source_path=source_path,
+        context=context,
+    ):
+        return True
+    return bool(
+        _unimplemented_abstract_methods(
+            node,
+            source_path=source_path,
+            context=context,
+        )
+    )
+
+
+def class_declares_sqlalchemy_mapping(node: ast.ClassDef) -> bool:
+    """Return whether a class declares a concrete SQLAlchemy table mapping."""
+
+    explicitly_abstract = any(
+        isinstance(child, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "__abstract__"
+            for target in (child.targets if isinstance(child, ast.Assign) else [child.target])
+        )
+        and isinstance(child.value, ast.Constant)
+        and child.value.value is True
+        for child in node.body
+    )
+    if explicitly_abstract:
+        return False
+    declares_table = any(
+        isinstance(child, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id in {"__table__", "__tablename__"}
+            for target in (child.targets if isinstance(child, ast.Assign) else [child.target])
+        )
+        for child in node.body
+    )
+    declares_mapped_attribute = any(
+        isinstance(descendant, ast.Call)
+        and attribute_chain(descendant.func)[-1:] in {("mapped_column",), ("Column",)}
+        for child in node.body
+        if isinstance(child, (ast.Assign, ast.AnnAssign))
+        for descendant in ast.walk(child)
+    )
+    return declares_table or declares_mapped_attribute
+
+
+def class_has_sqlalchemy_mapping_at(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    """Return whether a project class or an effective ancestor declares a mapping."""
+
+    return any(
+        class_declares_sqlalchemy_mapping(candidate)
+        for _candidate_path, candidate in project_class_hierarchy(
+            node,
+            path=source_path,
+            context=context,
+        )
+    )
+
+
+def _declares_explicit_abstract_class(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    protocol_names = {"typing.Protocol", "typing_extensions.Protocol"}
+    if any(
+        (resolved := context.qualified_names(source_path, base)) and resolved <= protocol_names
+        for base in node.bases
+    ):
+        return True
+    return any(
+        isinstance(child, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "__abstract__"
+            for target in (child.targets if isinstance(child, ast.Assign) else [child.target])
+        )
+        and isinstance(child.value, ast.Constant)
+        and child.value.value is True
+        for child in node.body
+    )
+
+
+def _unimplemented_abstract_methods(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> set[str]:
+    from specx.testing.architecture.rules._call_analysis import (
+        effective_class_method_declarations,
+    )
+
+    declarations: dict[
+        str,
+        list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef, str | None]],
+    ] = {}
+    for method_name, declaration in effective_class_method_declarations(
+        node,
+        path=source_path,
+        context=context,
+    ):
+        declarations.setdefault(method_name, []).append(
+            (
+                declaration.path,
+                declaration.function,
+                declaration.descriptor_component,
+            )
+        )
+    required: set[str] = set()
+    for method_name, candidates in declarations.items():
+        ordinary = [candidate for candidate in candidates if candidate[2] is None]
+        if ordinary:
+            if all(
+                _method_is_statically_abstract(function, path=path, context=context)
+                for path, function, _component in ordinary
+            ):
+                required.add(method_name)
+            continue
+        components = {component for _path, _function, component in candidates}
+        if any(
+            all(
+                _method_is_statically_abstract(function, path=path, context=context)
+                for path, function, candidate_component in candidates
+                if candidate_component == component
+            )
+            for component in components
+        ):
+            required.add(method_name)
+    return required
+
+
+def _method_is_statically_abstract(
+    method: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    abstract_decorators = {
+        "abc.abstractclassmethod",
+        "abc.abstractmethod",
+        "abc.abstractproperty",
+        "abc.abstractstaticmethod",
+    }
+    return any(
+        (resolved := context.qualified_names(path, decorator)) and resolved <= abstract_decorators
+        for decorator in method.decorator_list
+    )
+
+
+def project_class_hierarchy(
+    class_node: ast.ClassDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[tuple[Path, ast.ClassDef], ...]:
+    """Return project classes in Python C3 method-resolution order."""
+
+    definitions = {
+        qualified_class_name(node, source_path=candidate_path, context=context): (
+            candidate_path,
+            node,
+        )
+        for candidate_path in context.source_paths()
+        for node in module_scope_class_nodes(context.tree(candidate_path))
+    }
+    root = qualified_class_name(class_node, source_path=path, context=context)
+    # Rules also discover lexically nested classes. They are not importable under this
+    # simple name, but their own methods and project ancestors still need enforcement.
+    definitions[root] = (path, class_node)
+    cache: dict[str, tuple[str, ...]] = {}
+
+    def linearize(qualified: str, visiting: frozenset[str]) -> tuple[str, ...]:
+        if qualified in cache:
+            return cache[qualified]
+        if qualified in visiting or qualified not in definitions:
+            return (qualified,)
+        node_path, node = definitions[qualified]
+        bases = tuple(context.qualified_name(node_path, base) for base in node.bases)
+        result = (
+            qualified,
+            *_merge_c3(
+                [list(linearize(base, visiting | {qualified})) for base in bases] + [list(bases)]
+            ),
+        )
+        cache[qualified] = result
+        return result
+
+    return tuple(
+        definitions[qualified]
+        for qualified in linearize(root, frozenset())
+        if qualified in definitions
+    )
+
+
+def _merge_c3(sequences: list[list[str]]) -> tuple[str, ...]:
+    merged: list[str] = []
+    remaining = [sequence for sequence in sequences if sequence]
+    while remaining:
+        candidate: str | None = None
+        for sequence in remaining:
+            head = sequence[0]
+            if all(head not in other[1:] for other in remaining):
+                candidate = head
+                break
+        if candidate is None:
+            # Invalid Python hierarchies fail at runtime. Preserve deterministic analysis
+            # instead of making architecture checking itself fail.
+            candidate = remaining[0][0]
+        merged.append(candidate)
+        for sequence in remaining:
+            if sequence and sequence[0] == candidate:
+                sequence.pop(0)
+        remaining = [sequence for sequence in remaining if sequence]
+    return tuple(merged)
+
+
 def class_has_foundation_base_from_path(
     class_name: str,
     base: str,
@@ -603,7 +1077,10 @@ def class_has_foundation_base_from_path(
         if visit_key in visited:
             continue
         candidate_visited = {*visited, visit_key}
-        if any(found_base == base or found_base.endswith(f".{base}") for found_base in base_names):
+        if any(
+            found_base == base or found_base in _FOUNDATION_BASE_QUALIFIED_NAMES.get(base, set())
+            for found_base in base_names
+        ):
             return True
         if any(
             class_has_foundation_base_from_path(
@@ -618,6 +1095,36 @@ def class_has_foundation_base_from_path(
         ):
             return True
     return False
+
+
+_FOUNDATION_BASE_QUALIFIED_NAMES: dict[str, set[str]] = {
+    "BaseCapability": {"specx.core.foundation.capability.BaseCapability"},
+    "BaseCommand": {"specx.core.foundation.command.BaseCommand"},
+    "BaseController": {"specx.delivery.foundation.controller.BaseController"},
+    "BaseDTO": {"specx.core.foundation.dto.BaseDTO"},
+    "BaseDeliveryService": {"specx.delivery.foundation.service.BaseDeliveryService"},
+    "BaseEffectService": {"specx.core.foundation.effect_service.BaseEffectService"},
+    "BaseEntity": {"specx.core.foundation.entity.BaseEntity"},
+    "BaseFastAPISchema": {"specx.delivery.foundation.fastapi.schema.BaseFastAPISchema"},
+    "BaseGateway": {"specx.core.foundation.gateway.BaseGateway"},
+    "BaseLifecycle": {"specx.delivery.foundation.lifecycle.BaseLifecycle"},
+    "BasePureService": {"specx.core.foundation.pure_service.BasePureService"},
+    "BaseQuery": {"specx.core.foundation.query.BaseQuery"},
+    "BaseReadService": {"specx.core.foundation.read_service.BaseReadService"},
+    "BaseRepository": {"specx.core.foundation.repository.BaseRepository"},
+    "BaseRuntimeSettings": {
+        "specx.infrastructure.foundation.settings.BaseRuntimeSettings",
+    },
+    "BaseSQLAlchemyModel": {
+        "specx.infrastructure.foundation.sqlalchemy.model.BaseSQLAlchemyModel",
+        "specx.infrastructure.foundation.sqlalchemy_model.BaseSQLAlchemyModel",
+    },
+    "BaseUnitOfWork": {"specx.core.foundation.unit_of_work.BaseUnitOfWork"},
+    "BaseUnitOfWorkManager": {
+        "specx.core.foundation.unit_of_work_manager.BaseUnitOfWorkManager",
+    },
+    "BaseUseCase": {"specx.core.foundation.use_case.BaseUseCase"},
+}
 
 
 def _class_definition_candidates(
@@ -647,6 +1154,798 @@ def _source_module_name(path: Path, context: ArchitectureContext) -> str:
     return ".".join((context.config.package_name, *relative_module.parts))
 
 
+def qualified_symbol_bindings(
+    context: ArchitectureContext,
+    path: Path,
+    *,
+    at_node: ast.AST | None = None,
+) -> dict[str, str]:
+    """Return import and lexically local symbol bindings at one AST node."""
+
+    module_name = (
+        _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
+    )
+    bindings: dict[str, str] = {}
+    definition_time = at_node is not None and _is_definition_time_expression(
+        context.tree(path), at_node
+    )
+    target_position = _node_position(at_node) if definition_time and at_node is not None else None
+    for node in _lexical_scope_nodes(context.tree(path)):
+        node_position = _node_position(node)
+        if (
+            target_position is not None
+            and node_position is not None
+            and node_position >= target_position
+        ):
+            continue
+        _update_lexical_binding(
+            node,
+            bindings,
+            module_name=module_name,
+            local_scope=False,
+        )
+    if at_node is not None and not definition_time:
+        for scope in _containing_lexical_scopes(context.tree(path), at_node):
+            _update_function_scope_bindings(
+                scope,
+                bindings,
+                module_name=module_name,
+                at_node=at_node,
+            )
+    return bindings
+
+
+def qualified_symbol_binding_choices(
+    context: ArchitectureContext,
+    path: Path,
+    *,
+    at_node: ast.AST | None,
+) -> dict[str, frozenset[str]]:
+    """Return conservative reaching bindings, merging control-flow branches."""
+
+    deterministic = qualified_symbol_bindings(context, path, at_node=None)
+    choices = {name: frozenset({value}) for name, value in deterministic.items()}
+    if at_node is None:
+        return choices
+    tree = context.tree(path)
+    definition_time = _is_definition_time_expression(tree, at_node)
+    class_scope = _class_body_scope_for_expression(tree, at_node)
+    class_body_time = class_scope is not None
+    if definition_time or class_body_time:
+        module_name = (
+            _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
+        )
+        choices, _found = _flow_bindings_to_target(
+            tree.body,
+            {},
+            target=at_node,
+            module_name=module_name,
+        )
+        if class_scope is not None:
+            choices, _found = _flow_bindings_to_target(
+                class_scope.body,
+                choices,
+                target=at_node,
+                module_name=module_name,
+            )
+        choices = {
+            name: frozenset(
+                _module_qualified_choice(value, module_name=module_name) for value in values
+            )
+            for name, values in choices.items()
+        }
+        exact = qualified_symbol_bindings(context, path, at_node=at_node)
+        for name, value in exact.items():
+            choices.setdefault(name, frozenset({value}))
+        return choices
+    module_name = (
+        _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
+    )
+    for scope in _containing_lexical_scopes(context.tree(path), at_node):
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            arguments = (
+                *scope.args.posonlyargs,
+                *scope.args.args,
+                *scope.args.kwonlyargs,
+            )
+            for argument in arguments:
+                choices[argument.arg] = frozenset(
+                    {argument.arg if argument.arg in {"self", "cls"} else f"<local>.{argument.arg}"}
+                )
+            if scope.args.vararg is not None:
+                choices[scope.args.vararg.arg] = frozenset({f"<local>.{scope.args.vararg.arg}"})
+            if scope.args.kwarg is not None:
+                choices[scope.args.kwarg.arg] = frozenset({f"<local>.{scope.args.kwarg.arg}"})
+            if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                choices, _found = _flow_bindings_to_target(
+                    scope.body,
+                    choices,
+                    target=at_node,
+                    module_name=module_name,
+                )
+        else:
+            for generator in scope.generators:
+                for name in _stored_names(generator.target):
+                    choices[name] = frozenset({f"<local>.{name}"})
+    return choices
+
+
+def _class_body_scope_for_expression(
+    tree: ast.Module,
+    target: ast.AST,
+) -> ast.ClassDef | None:
+    containing: list[ast.ClassDef] = []
+
+    def visit(node: ast.AST) -> bool:
+        if node is target:
+            return True
+        for child in ast.iter_child_nodes(node):
+            if visit(child):
+                if isinstance(node, ast.ClassDef):
+                    containing.append(node)
+                return True
+        return False
+
+    visit(tree)
+    return next(
+        (
+            class_scope
+            for class_scope in containing
+            if _is_class_body_time_expression(class_scope, target)
+        ),
+        None,
+    )
+
+
+def _is_class_body_time_expression(
+    class_scope: ast.ClassDef,
+    target: ast.AST,
+) -> bool:
+    def evaluated_in_class_body(node: ast.AST) -> bool:
+        if node is target:
+            return True
+        expressions: tuple[ast.AST, ...]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            expressions = (
+                *node.decorator_list,
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+                *(argument.annotation for argument in node.args.posonlyargs if argument.annotation),
+                *(argument.annotation for argument in node.args.args if argument.annotation),
+                *(argument.annotation for argument in node.args.kwonlyargs if argument.annotation),
+                *(
+                    (node.args.vararg.annotation,)
+                    if node.args.vararg and node.args.vararg.annotation
+                    else ()
+                ),
+                *(
+                    (node.args.kwarg.annotation,)
+                    if node.args.kwarg and node.args.kwarg.annotation
+                    else ()
+                ),
+                *((node.returns,) if node.returns is not None else ()),
+            )
+        elif isinstance(node, ast.Lambda):
+            expressions = (
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+            )
+        elif isinstance(node, ast.ClassDef):
+            expressions = (
+                *node.decorator_list,
+                *node.bases,
+                *(item.value for item in node.keywords),
+            )
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            expressions = (node.generators[0].iter,) if node.generators else ()
+        else:
+            expressions = tuple(ast.iter_child_nodes(node))
+        return any(evaluated_in_class_body(expression) for expression in expressions)
+
+    return any(evaluated_in_class_body(statement) for statement in class_scope.body)
+
+
+LexicalScope = (
+    ast.FunctionDef
+    | ast.AsyncFunctionDef
+    | ast.Lambda
+    | ast.ListComp
+    | ast.SetComp
+    | ast.DictComp
+    | ast.GeneratorExp
+)
+
+
+def _containing_lexical_scopes(
+    tree: ast.Module,
+    target: ast.AST,
+) -> tuple[LexicalScope, ...]:
+    scopes: list[LexicalScope] = []
+
+    def visit(node: ast.AST) -> bool:
+        if node is target:
+            return True
+        for child in ast.iter_child_nodes(node):
+            if visit(child):
+                if isinstance(
+                    node,
+                    (
+                        ast.FunctionDef,
+                        ast.AsyncFunctionDef,
+                        ast.Lambda,
+                        ast.ListComp,
+                        ast.SetComp,
+                        ast.DictComp,
+                        ast.GeneratorExp,
+                    ),
+                ):
+                    scopes.append(node)
+                return True
+        return False
+
+    visit(tree)
+    scopes.reverse()
+    return tuple(scopes)
+
+
+def _update_function_scope_bindings(
+    function: LexicalScope,
+    bindings: dict[str, str],
+    *,
+    module_name: str,
+    at_node: ast.AST,
+) -> None:
+    if isinstance(function, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        for generator in function.generators:
+            for name in _stored_names(generator.target):
+                bindings[name] = f"<local>.{name}"
+        return
+    arguments = (
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    )
+    for argument in arguments:
+        bindings[argument.arg] = (
+            argument.arg if argument.arg in {"self", "cls"} else f"<local>.{argument.arg}"
+        )
+    if function.args.vararg is not None:
+        bindings[function.args.vararg.arg] = f"<local>.{function.args.vararg.arg}"
+    if function.args.kwarg is not None:
+        bindings[function.args.kwarg.arg] = f"<local>.{function.args.kwarg.arg}"
+
+    target_position = _node_position(at_node)
+    if isinstance(function, ast.Lambda):
+        return
+    for node in _lexical_scope_nodes(function):
+        node_position = _node_position(node)
+        if (
+            target_position is not None
+            and node_position is not None
+            and node_position >= target_position
+        ):
+            continue
+        _update_lexical_binding(
+            node,
+            bindings,
+            module_name=module_name,
+            local_scope=True,
+        )
+
+
+def _is_definition_time_expression(tree: ast.Module, target: ast.AST) -> bool:
+    def contains(root: ast.AST | None) -> bool:
+        return root is not None and any(node is target for node in ast.walk(root))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            if any(contains(expression) for expression in (*node.decorator_list, *node.bases)):
+                return True
+            if any(contains(keyword.value) for keyword in node.keywords):
+                return True
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if not isinstance(node, ast.Lambda) and any(
+            contains(expression) for expression in node.decorator_list
+        ):
+            return True
+        if not isinstance(node, ast.Lambda) and contains(node.returns):
+            return True
+        if any(
+            contains(expression)
+            for expression in (
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+                *(argument.annotation for argument in node.args.posonlyargs if argument.annotation),
+                *(argument.annotation for argument in node.args.args if argument.annotation),
+                *(argument.annotation for argument in node.args.kwonlyargs if argument.annotation),
+            )
+        ):
+            return True
+    return False
+
+
+def _flow_bindings_to_target(
+    statements: list[ast.stmt],
+    state: dict[str, frozenset[str]],
+    *,
+    target: ast.AST,
+    module_name: str,
+) -> tuple[dict[str, frozenset[str]], bool]:
+    current = dict(state)
+    for statement in statements:
+        if _contains_node(statement, target):
+            branch_entry = _flow_statement_entry_bindings(
+                statement,
+                current,
+                before_target=target,
+            )
+            if (
+                isinstance(statement, ast.If)
+                and (truth := _flow_condition_truth(statement.test, branch_entry)) is not None
+            ):
+                branch = statement.body if truth else statement.orelse
+                if any(_contains_node(child, target) for child in branch):
+                    return _flow_bindings_to_target(
+                        branch,
+                        branch_entry,
+                        target=target,
+                        module_name=module_name,
+                    )
+                return branch_entry, True
+            if (
+                isinstance(statement, ast.While)
+                and _flow_condition_truth(statement.test, branch_entry) is False
+            ):
+                if any(_contains_node(child, target) for child in statement.orelse):
+                    return _flow_bindings_to_target(
+                        statement.orelse,
+                        branch_entry,
+                        target=target,
+                        module_name=module_name,
+                    )
+                return branch_entry, True
+            if isinstance(statement, ast.Try):
+                if any(_contains_node(child, target) for child in statement.finalbody):
+                    before_final = _flow_try_before_finally(
+                        statement,
+                        current,
+                        module_name=module_name,
+                    )
+                    return _flow_bindings_to_target(
+                        statement.finalbody,
+                        before_final,
+                        target=target,
+                        module_name=module_name,
+                    )
+                if any(_contains_node(child, target) for child in statement.orelse):
+                    body_state = _flow_complete_block(
+                        statement.body,
+                        current,
+                        module_name=module_name,
+                    )
+                    return _flow_bindings_to_target(
+                        statement.orelse,
+                        body_state,
+                        target=target,
+                        module_name=module_name,
+                    )
+                for handler in statement.handlers:
+                    if any(_contains_node(child, target) for child in handler.body):
+                        return _flow_bindings_to_target(
+                            handler.body,
+                            _flow_try_handler_entry_state(
+                                statement,
+                                current,
+                                module_name=module_name,
+                            ),
+                            target=target,
+                            module_name=module_name,
+                        )
+            for branch in _statement_branches(statement):
+                if any(_contains_node(child, target) for child in branch):
+                    return _flow_bindings_to_target(
+                        branch,
+                        branch_entry,
+                        target=target,
+                        module_name=module_name,
+                    )
+            return branch_entry, True
+        current = _flow_statement_bindings(statement, current, module_name=module_name)
+    return current, False
+
+
+def _flow_statement_bindings(
+    statement: ast.stmt,
+    state: dict[str, frozenset[str]],
+    *,
+    module_name: str,
+) -> dict[str, frozenset[str]]:
+    current = _flow_statement_entry_bindings(statement, state)
+    if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        for target in targets:
+            _bind_choice_target(target, statement.value, current)
+        return current
+    if isinstance(statement, ast.Try):
+        before_final = _flow_try_before_finally(
+            statement,
+            current,
+            module_name=module_name,
+        )
+        return _flow_complete_block(
+            statement.finalbody,
+            before_final,
+            module_name=module_name,
+        )
+    if (
+        isinstance(statement, ast.If)
+        and (truth := _flow_condition_truth(statement.test, current)) is not None
+    ):
+        branch = statement.body if truth else statement.orelse
+        return _flow_complete_block(branch, current, module_name=module_name)
+    if isinstance(statement, ast.While) and _flow_condition_truth(statement.test, current) is False:
+        return _flow_complete_block(statement.orelse, current, module_name=module_name)
+    branches = _statement_branches(statement)
+    if branches:
+        branch_states = [
+            _flow_complete_block(branch, current, module_name=module_name) for branch in branches
+        ]
+        if isinstance(statement, (ast.For, ast.AsyncFor, ast.While, ast.Match)):
+            branch_states.append(current)
+        return _merge_binding_states(branch_states)
+    _update_choice_binding(statement, current, module_name=module_name)
+    return current
+
+
+def _flow_condition_truth(
+    expression: ast.expr,
+    bindings: dict[str, frozenset[str]],
+) -> bool | None:
+    return statically_known_condition(
+        expression,
+        qualified_names=_resolve_expression_choices(expression, bindings),
+    )
+
+
+def statically_known_condition(
+    expression: ast.expr,
+    *,
+    qualified_names: frozenset[str],
+) -> bool | None:
+    """Return truth for literal conditions and exact type-checking sentinels."""
+
+    if isinstance(expression, ast.Constant):
+        return bool(expression.value)
+    type_checking_names = {
+        "typing.TYPE_CHECKING",
+        "typing_extensions.TYPE_CHECKING",
+    }
+    if qualified_names and qualified_names <= type_checking_names:
+        return False
+    return None
+
+
+def _flow_statement_entry_bindings(
+    statement: ast.stmt,
+    state: dict[str, frozenset[str]],
+    *,
+    before_target: ast.AST | None = None,
+) -> dict[str, frozenset[str]]:
+    current = dict(state)
+    expressions: tuple[ast.expr, ...] = ()
+    if isinstance(statement, (ast.If, ast.While)):
+        expressions = (statement.test,)
+    elif isinstance(statement, (ast.For, ast.AsyncFor)):
+        expressions = (statement.iter,)
+    elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Return)):
+        expressions = (statement.value,) if statement.value is not None else ()
+    elif isinstance(statement, ast.Raise):
+        expressions = tuple(
+            expression for expression in (statement.exc, statement.cause) if expression is not None
+        )
+    elif isinstance(statement, ast.Assert):
+        expressions = (statement.test,) + ((statement.msg,) if statement.msg is not None else ())
+    elif isinstance(statement, (ast.With, ast.AsyncWith)):
+        expressions = tuple(item.context_expr for item in statement.items)
+    elif isinstance(statement, ast.Match):
+        expressions = (statement.subject,)
+    for expression in expressions:
+        for node in ast.walk(expression):
+            if isinstance(node, ast.NamedExpr) and (
+                before_target is None or _node_ends_before(node, before_target)
+            ):
+                _bind_choice_target(node.target, node.value, current)
+    return current
+
+
+def _node_ends_before(node: ast.AST, target: ast.AST) -> bool:
+    end_line = getattr(node, "end_lineno", None)
+    end_column = getattr(node, "end_col_offset", None)
+    target_line = getattr(target, "lineno", None)
+    target_column = getattr(target, "col_offset", None)
+    if not all(
+        isinstance(value, int) for value in (end_line, end_column, target_line, target_column)
+    ):
+        return False
+    return (end_line, end_column) <= (target_line, target_column)
+
+
+def _flow_try_before_finally(
+    statement: ast.Try,
+    state: dict[str, frozenset[str]],
+    *,
+    module_name: str,
+) -> dict[str, frozenset[str]]:
+    body_state = _flow_complete_block(statement.body, state, module_name=module_name)
+    if body_state:
+        body_state = _flow_complete_block(
+            statement.orelse,
+            body_state,
+            module_name=module_name,
+        )
+    handler_entry = _flow_try_handler_entry_state(
+        statement,
+        state,
+        module_name=module_name,
+    )
+    handler_states = [
+        _flow_complete_block(handler.body, handler_entry, module_name=module_name)
+        for handler in statement.handlers
+    ]
+    return _merge_binding_states([body_state, *handler_states])
+
+
+def _flow_try_handler_entry_state(
+    statement: ast.Try,
+    state: dict[str, frozenset[str]],
+    *,
+    module_name: str,
+) -> dict[str, frozenset[str]]:
+    prefixes = [dict(state)]
+    current = dict(state)
+    for body_statement in statement.body:
+        current = _flow_statement_bindings(
+            body_statement,
+            current,
+            module_name=module_name,
+        )
+        prefixes.append(current)
+        if isinstance(body_statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            break
+    return _merge_binding_states(prefixes)
+
+
+def _flow_complete_block(
+    statements: list[ast.stmt],
+    state: dict[str, frozenset[str]],
+    *,
+    module_name: str,
+) -> dict[str, frozenset[str]]:
+    current = dict(state)
+    for statement in statements:
+        if isinstance(statement, ast.Return):
+            return {}
+        if isinstance(statement, (ast.Raise, ast.Break, ast.Continue)):
+            return current
+        current = _flow_statement_bindings(statement, current, module_name=module_name)
+    return current
+
+
+def _module_qualified_choice(value: str, *, module_name: str) -> str:
+    for prefix in ("<local-class>.", "<local>."):
+        if value.startswith(prefix):
+            suffix = value.removeprefix(prefix)
+            return f"{module_name}.{suffix}" if module_name else suffix
+    return value
+
+
+def _statement_branches(statement: ast.stmt) -> tuple[list[ast.stmt], ...]:
+    if isinstance(statement, ast.If):
+        return (statement.body, statement.orelse)
+    if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+        return (statement.body, statement.orelse)
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return (statement.body,)
+    if isinstance(statement, ast.Try):
+        return (statement.body, *(handler.body for handler in statement.handlers))
+    if isinstance(statement, ast.Match):
+        return tuple(case.body for case in statement.cases)
+    return ()
+
+
+def _merge_binding_states(
+    states: list[dict[str, frozenset[str]]],
+) -> dict[str, frozenset[str]]:
+    states = [state for state in states if state]
+    if not states:
+        return {}
+    names: set[str] = set()
+    for state in states:
+        names.update(state)
+    return {
+        name: frozenset().union(*(state.get(name, frozenset()) for state in states))
+        for name in names
+    }
+
+
+def _resolve_expression_choices(
+    expression: ast.expr | None,
+    bindings: dict[str, frozenset[str]],
+) -> frozenset[str]:
+    if isinstance(expression, ast.IfExp):
+        return _resolve_expression_choices(expression.body, bindings) | _resolve_expression_choices(
+            expression.orelse, bindings
+        )
+    if isinstance(expression, ast.NamedExpr):
+        return _resolve_expression_choices(expression.value, bindings)
+    chain = attribute_chain(expression)
+    if not chain:
+        return frozenset()
+    roots = bindings.get(chain[0], frozenset({chain[0]}))
+    return frozenset(".".join((root, *chain[1:])) for root in roots)
+
+
+def _bind_choice_target(
+    target: ast.expr,
+    value: ast.expr | None,
+    bindings: dict[str, frozenset[str]],
+) -> None:
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
+        for child_target, child_value in zip(target.elts, value.elts, strict=True):
+            _bind_choice_target(child_target, child_value, bindings)
+        return
+    if isinstance(target, ast.Starred):
+        _bind_choice_target(target.value, value, bindings)
+        return
+    values = _resolve_expression_choices(value, bindings)
+    if not values and isinstance(value, (ast.Tuple, ast.List)):
+        values = frozenset(
+            resolved
+            for element in value.elts
+            for resolved in _resolve_expression_choices(element, bindings)
+        )
+    for name in _stored_names(target):
+        bindings[name] = values or frozenset({f"<local>.{name}"})
+
+
+def _update_choice_binding(
+    node: ast.AST,
+    bindings: dict[str, frozenset[str]],
+    *,
+    module_name: str,
+) -> None:
+    deterministic = {name: next(iter(values)) for name, values in bindings.items() if values}
+    before = dict(deterministic)
+    _update_lexical_binding(node, deterministic, module_name=module_name, local_scope=True)
+    for name, value in deterministic.items():
+        if before.get(name) != value:
+            bindings[name] = frozenset({value})
+
+
+def _stored_names(expression: ast.expr) -> set[str]:
+    return {
+        node.id
+        for node in ast.walk(expression)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+
+
+def _contains_node(root: ast.AST, target: ast.AST) -> bool:
+    return any(node is target for node in ast.walk(root))
+
+
+def _lexical_scope_nodes(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.AST, ...]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not scope and isinstance(
+            node,
+            (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                nodes.append(node)
+            return
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(scope)
+    return tuple(
+        sorted(
+            nodes,
+            key=lambda node: _node_position(node) or (-1, -1),
+        )
+    )
+
+
+def _node_position(node: ast.AST) -> tuple[int, int] | None:
+    line = getattr(node, "lineno", None)
+    column = getattr(node, "col_offset", None)
+    return (line, column) if isinstance(line, int) and isinstance(column, int) else None
+
+
+def _update_lexical_binding(
+    node: ast.AST,
+    bindings: dict[str, str],
+    *,
+    module_name: str,
+    local_scope: bool,
+) -> None:
+    type_alias_name = getattr(node, "name", None)
+    if type(node).__name__ == "TypeAlias" and isinstance(type_alias_name, ast.Name):
+        bindings[type_alias_name.id] = (
+            f"<local>.{type_alias_name.id}"
+            if local_scope
+            else f"{module_name}.{type_alias_name.id}"
+            if module_name
+            else type_alias_name.id
+        )
+        return
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        _update_import_bindings(node, bindings, module_name=module_name)
+        return
+    if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        bindings[node.name] = (
+            f"<local-class>.{node.name}"
+            if local_scope and isinstance(node, ast.ClassDef)
+            else f"<local>.{node.name}"
+            if local_scope
+            else f"{module_name}.{node.name}"
+            if module_name
+            else node.name
+        )
+        return
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+        targets: tuple[ast.expr, ...]
+        value: ast.expr | None
+        if isinstance(node, ast.Assign):
+            targets = tuple(node.targets)
+            value = node.value
+        else:
+            targets = (node.target,)
+            value = node.value
+        for target in targets:
+            _bind_deterministic_target(target, value, bindings)
+
+
+def _bind_deterministic_target(
+    target: ast.expr,
+    value: ast.expr | None,
+    bindings: dict[str, str],
+) -> None:
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
+        for child_target, child_value in zip(target.elts, value.elts, strict=True):
+            _bind_deterministic_target(child_target, child_value, bindings)
+        return
+    if isinstance(target, ast.Starred):
+        _bind_deterministic_target(target.value, value, bindings)
+        return
+    resolved_value = _resolve_expression_with_bindings(value, bindings)
+    for name in _stored_names(target):
+        bindings[name] = resolved_value or f"<local>.{name}"
+
+
+def _resolve_expression_with_bindings(
+    expression: ast.expr | None,
+    bindings: dict[str, str],
+) -> str | None:
+    chain = attribute_chain(expression)
+    if not chain:
+        return None
+    return ".".join((bindings.get(chain[0], chain[0]), *chain[1:]))
+
+
 def _index_class_definitions(
     statements: list[ast.stmt],
     *,
@@ -656,7 +1955,6 @@ def _index_class_definitions(
     mutable_index: dict[str, list[tuple[Path, set[str]]]],
 ) -> None:
     for node in statements:
-        _update_import_bindings(node, bindings, module_name=module_name)
         if isinstance(node, ast.ClassDef):
             mutable_index.setdefault(node.name, []).append(
                 (
@@ -673,6 +1971,12 @@ def _index_class_definitions(
             )
             bindings[node.name] = f"{module_name}.{node.name}"
             continue
+        _update_lexical_binding(
+            node,
+            bindings,
+            module_name=module_name,
+            local_scope=False,
+        )
         for _, value in ast.iter_fields(node):
             raw_value = cast(object, value)
             if not isinstance(raw_value, list):
@@ -830,6 +2134,32 @@ def class_injected_repository_field_names(
             injected_name,
             "BaseRepository",
             class_base_name_index,
+        ):
+            fields.add(child.target.id)
+    return fields
+
+
+def class_injected_repository_field_names_at(
+    class_node: ast.ClassDef,
+    aliases: dict[str, str],
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> set[str]:
+    """Return repository fields without conflating same-named project classes."""
+
+    fields: set[str] = set()
+    for child in class_node.body:
+        if not isinstance(child, ast.AnnAssign) or not isinstance(child.target, ast.Name):
+            continue
+        injected_name = injected_type_name(child.annotation, aliases)
+        if injected_name.endswith("Repository") or class_has_foundation_base_from_path(
+            injected_name,
+            "BaseRepository",
+            source_path=source_path,
+            context=context,
+            definition_index=definition_index,
         ):
             fields.add(child.target.id)
     return fields

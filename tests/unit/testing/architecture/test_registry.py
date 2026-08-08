@@ -4,6 +4,7 @@ import importlib
 import inspect
 import pkgutil
 from inspect import getdoc
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -15,6 +16,7 @@ from specx.testing.architecture import (
     SpecxRuleId,
     SpecxRuleRegistryError,
 )
+from specx.testing.architecture.guidance import BUILTIN_RULE_GUIDANCE
 from specx.testing.architecture.models import ArchitectureRuleType
 from specx.testing.architecture.registry import SpecxRuleRegistry
 from specx.testing.architecture.rules import BUILT_IN_RULES
@@ -73,15 +75,41 @@ def test_rule_package_has_exactly_one_registered_rule_per_module() -> None:
     assert set(discovered_rules) == set(BUILT_IN_RULES)
 
 
+def test_rules_do_not_use_lossy_simple_name_inheritance_index() -> None:
+    package = importlib.import_module("specx.testing.architecture.rules")
+    package_root = Path(next(iter(package.__path__)))
+    offenders = [
+        path.name
+        for path in package_root.glob("*.py")
+        if "class_base_name_index" in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []
+
+
 def test_every_builtin_rule_has_selection_metadata() -> None:
     metadata = [rule.metadata() for rule in BUILT_IN_RULES]
 
     assert all(item.family in {"neutral", "fastapi"} for item in metadata)
     assert all(item.summary for item in metadata)
     assert {str(item.rule_id) for item in metadata if not item.default_enabled} == {
-        str(SpecxRuleId.FASTAPI_ROOT_AGENTS_MD_DOCUMENTS_DELIVERY),
+        str(SpecxRuleId.FASTAPI_ROOT_AGENTS_MD_DOCUMENTS_ENTRYPOINT),
         str(SpecxRuleId.PUBLIC_ROUTES_USE_FULL_API_V1_PATHS),
     }
+    assert all(item.remediation for item in metadata)
+    assert all(
+        item.remediation is not None and not item.remediation.startswith("Address this rule:")
+        for item in metadata
+    )
+    assert all("see the rule documentation" not in item.detection_boundary for item in metadata)
+    assert all(
+        item.documentation_url is not None
+        and item.documentation_url.startswith(
+            "https://specx.dev/docs/reference/architecture-rules/#"
+        )
+        for item in metadata
+    )
+    assert set(BUILTIN_RULE_GUIDANCE) == {str(item.rule_id) for item in metadata}
 
 
 def test_all_selector_enables_every_builtin_rule() -> None:

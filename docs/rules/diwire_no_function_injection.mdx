@@ -1,0 +1,39 @@
+export const ruleId = 'diwire.no-function-injection'
+export const summary = 'Reject function-level DI while preserving constructor fields and ordinary fixtures.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="diwire_no_function_injection"></span>
+
+## `diwire.no-function-injection`
+
+Reject function-level DI while preserving constructor fields and ordinary fixtures.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Class constructor fields keep dependencies inspectable; function injection hides graph ownership and can resemble pytest fixtures.
+
+### Failing example
+
+```python
+def handler(service: Injected[OrderService]) -> None:
+    service.run()
+```
+
+### Passing example
+
+```python
+class Handler(BaseController):
+    service: Injected[OrderService]
+```
+
+### Detection notes
+
+Recognizes exact `resolver_context.inject` calls and definition-time decorator aliases plus
+`diwire.Injected[...]`, quoted forward annotations, same-module or imported project injection aliases,
+and exact DIWire injection markers on functions and methods. Unrelated `Annotated` metadata containing the word "Injected",
+constructor fields, and ordinary pytest parameters pass. Direct function-level service location via
+`resolver_context.resolve` or `resolver_context.aresolve` is also rejected.

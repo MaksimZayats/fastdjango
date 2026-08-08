@@ -6,9 +6,9 @@ import { NextPrev } from "@storybookComponents/NextPrev"
 <Title>Choose a workflow</Title>
 <Subtitle>Start from the change you need, not from the layer names.</Subtitle>
 
-Use one primary skill for a focused change. Combine skills when the work crosses real boundaries. For
-example, a persisted HTTP feature usually needs a use case, an adapter, a migration, a controller,
-composition, and tests.
+Start from the project command or public guide that owns the change. A persisted HTTP feature still
+crosses a use case, adapter, migration, controller, composition, and tests, but it does not require a
+stack of agent skills.
 
 <table className="specx-decision-table">
   <thead>
@@ -16,18 +16,15 @@ composition, and tests.
   </thead>
   <tbody>
     <tr><td>Initialize a framework-neutral service</td><td><code>specx init</code></td></tr>
-    <tr><td>Start or reshape a FastAPI service</td><td><code>specx-project-structure</code></td></tr>
-    <tr><td>Decide where code belongs</td><td><code>specx-component-architecture</code></td></tr>
-    <tr><td>Add an application action</td><td><code>specx-add-core-use-case</code></td></tr>
-    <tr><td>Extract reusable core behavior</td><td><code>specx-add-core-service</code></td></tr>
-    <tr><td>Talk to a database or external system</td><td><code>specx-add-infrastructure-adapter</code></td></tr>
-    <tr><td>Expose FastAPI routes</td><td><code>specx-add-delivery-controller</code></td></tr>
-    <tr><td>Wire dependencies</td><td><code>specx-diwire-composition</code></td></tr>
-    <tr><td>Add environment-backed settings</td><td><code>specx-settings</code></td></tr>
-    <tr><td>Add or repair schema migrations</td><td><code>specx-sqlalchemy-migrations</code></td></tr>
-    <tr><td>Set up strict project tooling</td><td><code>specx-project-tooling</code></td></tr>
-    <tr><td>Add tests or test boundaries</td><td><code>specx-tests</code></td></tr>
-    <tr><td>Choose or extend foundation bases</td><td><code>specx-foundation</code></td></tr>
+    <tr><td>Inspect application structure</td><td><code>specx project component list --output-format json</code></td></tr>
+    <tr><td>Add an application action</td><td><code>specx project use-case create ... --dry-run --output-format json</code></td></tr>
+    <tr><td>Extract reusable core behavior</td><td><a href="/docs/guides/add-core-behavior/">Add core behavior</a></td></tr>
+    <tr><td>Talk to a database or external system</td><td><a href="/docs/concepts/ports-and-adapters/">Ports and adapters</a></td></tr>
+    <tr><td>Expose FastAPI routes</td><td><a href="/docs/guides/add-fastapi-delivery/">Add FastAPI delivery</a></td></tr>
+    <tr><td>Wire dependencies</td><td><a href="/docs/guides/compose-dependencies/">Compose dependencies</a></td></tr>
+    <tr><td>Add settings</td><td><a href="/docs/guides/configure-settings-and-logging/">Settings and logging</a></td></tr>
+    <tr><td>Add schema migrations</td><td><a href="/docs/guides/add-persistence/">Add persistence</a></td></tr>
+    <tr><td>Resolve architecture failures</td><td><code>specx check --output-format json</code></td></tr>
   </tbody>
 </table>
 
@@ -35,25 +32,23 @@ composition, and tests.
 
 ### A framework-neutral domain action
 
-Use `specx-add-core-use-case`, then `specx-add-core-service` only if the action contains reusable
-behavior. Add `specx-tests` for the unit test shape.
+Create or inspect the use case through `specx project`; extract a service only if the action contains
+reusable behavior. Mirror each behavior module in unit tests and resolve targets from the container.
 
 ### A persisted FastAPI endpoint
 
-Start with `specx-component-architecture` if the scope is new. Then use the use-case, infrastructure,
-migration, delivery, composition, settings, and testing skills for their respective parts. The use
-case owns the transaction boundary; the controller owns HTTP mapping.
+Use the architecture, persistence, delivery, composition, settings, and testing guides for their
+respective parts. The use case owns the transaction boundary; the controller owns HTTP mapping.
 
 ### An external API integration
 
-Use `specx-add-infrastructure-adapter` to define a business-language gateway and its technical
-adapter. Use `specx-settings` for credentials and endpoints. Inject the gateway port into core code,
-not the SDK client or settings object.
+Define a business-language gateway and its technical adapter. Keep credentials and endpoints at the
+settings/composition edge. Inject the gateway port into core code, not the SDK client or settings.
 
 ### An existing service with mixed boundaries
 
-Use `specx-component-architecture` to map the current structure before moving files. Add the Python
-package, configure a small selector set, fix violations by boundary, then broaden selection. See
+Map the current structure before moving files. Add the Python package, configure a small selector
+set, fix violations by boundary, then broaden selection. See
 [Adopt specx in an existing service](/docs/guides/adopt-specx-in-an-existing-service/).
 
 ## Choose the narrowest abstraction

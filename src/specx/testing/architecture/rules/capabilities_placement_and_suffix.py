@@ -4,9 +4,9 @@ import ast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_base_name_index,
+    class_definition_base_index,
     class_direct_base_names,
-    class_has_foundation_base,
+    class_has_foundation_base_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -27,7 +27,7 @@ class CapabilitiesLiveInExpectedPackagesAndUseExpectedSuffixesRule(ArchitectureR
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.source_paths():
             if "foundation" in path.relative_to(context.src_root).parts:
                 continue
@@ -38,7 +38,13 @@ class CapabilitiesLiveInExpectedPackagesAndUseExpectedSuffixesRule(ArchitectureR
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
                     continue
-                if not class_has_foundation_base(node.name, "BaseCapability", base_index):
+                if not class_has_foundation_base_at(
+                    node,
+                    "BaseCapability",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                ):
                     continue
                 if relative_layer == "core":
                     inner_package = relative_parts[2] if len(relative_parts) > 2 else ""

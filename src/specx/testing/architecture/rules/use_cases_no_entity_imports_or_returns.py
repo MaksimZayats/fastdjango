@@ -7,8 +7,8 @@ from specx.testing.architecture.context import (
     annotation_name,
     call_from_expression,
     call_is_rooted_in_self_attributes,
-    class_base_name_index,
-    class_injected_repository_field_names,
+    class_definition_base_index,
+    class_injected_repository_field_names_at,
     execute_methods_with_classes,
     expression_is_rooted_in_names,
     repository_result_variable_names,
@@ -32,7 +32,7 @@ class UseCasesDoNotImportOrReturnEntitiesRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in (context.src_root / "core").glob("*/use_cases/**/*.py"):
             if path.name == "__init__.py" or path not in context.ast_project.files:
                 continue
@@ -55,10 +55,12 @@ class UseCasesDoNotImportOrReturnEntitiesRule(ArchitectureRuleBase):
                         )
 
             for class_node, execute in execute_methods_with_classes(tree):
-                repository_fields = class_injected_repository_field_names(
+                repository_fields = class_injected_repository_field_names_at(
                     class_node,
                     aliases,
-                    base_index,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
                 )
                 return_annotation = annotation_name(execute.returns, aliases)
                 if "Entity" in return_annotation:

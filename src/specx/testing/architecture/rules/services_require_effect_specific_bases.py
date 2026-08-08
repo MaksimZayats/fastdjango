@@ -5,8 +5,8 @@ import ast
 from specx.testing.architecture.context import (
     CORE_SERVICE_BASE_NAMES,
     ArchitectureContext,
-    class_base_name_index,
-    class_has_any_foundation_base,
+    class_definition_base_index,
+    class_has_foundation_base_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
@@ -27,14 +27,19 @@ class CoreServicesUseEffectSpecificServiceBasesRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in context.core_service_paths():
             tree = context.tree(path)
             for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef) and not class_has_any_foundation_base(
-                    node.name,
-                    CORE_SERVICE_BASE_NAMES,
-                    base_index,
+                if isinstance(node, ast.ClassDef) and not any(
+                    class_has_foundation_base_at(
+                        node,
+                        base,
+                        source_path=path,
+                        context=context,
+                        definition_index=definition_index,
+                    )
+                    for base in CORE_SERVICE_BASE_NAMES
                 ):
                     violations.append(
                         violation(

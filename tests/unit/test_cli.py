@@ -12,26 +12,40 @@ from specx.cli import main
 
 
 def test_cli_help_lists_primary_commands(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as raised:
-        main(["--help"])
+    exit_code = main(["--help"])
 
     output = capsys.readouterr().out
-    assert raised.value.code == 0
+    assert exit_code == 0
     assert "check" in output
     assert "init" in output
+    assert "project" in output
     assert "rule" in output
 
 
 def test_init_help_lists_project_options(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as raised:
-        main(["init", "--help"])
+    exit_code = main(["init", "--help"])
 
     output = capsys.readouterr().out
-    assert raised.value.code == 0
+    assert exit_code == 0
     assert "--name" in output
     assert "--package" in output
     assert "--python" in output
     assert "--no-sync" in output
+
+
+def test_cli_version_nested_short_help_and_project_metavars(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out.strip()
+
+    assert main(["project", "use-case", "create", "-h"]) == 0
+    help_output = capsys.readouterr().out
+    assert "COMPONENT/NAME" in help_output
+    assert "NAME:TYPE" in help_output
+    assert "note:str?" in help_output
+    assert "track_ids:list[str]" in help_output
+    assert "--output-format" in help_output
 
 
 def test_init_creates_neutral_zero_config_project(
@@ -59,6 +73,7 @@ def test_init_creates_neutral_zero_config_project(
     assert pyproject["tool"]["ruff"]["target-version"] == "py314"
     assert pyproject["tool"]["ruff"]["lint"]["select"] == ["ALL"]
     assert "D100" in pyproject["tool"]["ruff"]["lint"]["ignore"]
+    assert "CPY001" in pyproject["tool"]["ruff"]["lint"]["ignore"]
     assert "D203" in pyproject["tool"]["ruff"]["lint"]["ignore"]
     assert pyproject["tool"]["ruff"]["lint"]["per-file-ignores"]["**/__init__.py"] == ["D104"]
     assert pyproject["tool"]["specx"]["select"] == ["ALL"]
@@ -428,7 +443,11 @@ def test_check_reports_violation_location_and_exit_one(
 ) -> None:
     _write_passing_project(
         tmp_path,
-        tool_specx=('ignore = ["tests.mirror-source-structure", "packages.init-files-are-empty"]'),
+        tool_specx=(
+            'ignore = ["tests.mirror-source-structure", '
+            '"tests.core-behavior-resolves-from-container", '
+            '"packages.init-files-are-empty"]'
+        ),
     )
     _write(
         tmp_path / "src" / "demo_service" / "core" / "tasks" / "services" / "title_service.py",
@@ -442,6 +461,8 @@ def test_check_reports_violation_location_and_exit_one(
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "title_service.py:3:1: error classes.require-example-docstrings" in output
+    assert "  help:" in output
+    assert "  docs: https://specx.dev/docs/reference/architecture-rules/" in output
 
 
 def test_check_json_emits_versioned_machine_readable_diagnostics(
@@ -450,7 +471,11 @@ def test_check_json_emits_versioned_machine_readable_diagnostics(
 ) -> None:
     _write_passing_project(
         tmp_path,
-        tool_specx=('ignore = ["tests.mirror-source-structure", "packages.init-files-are-empty"]'),
+        tool_specx=(
+            'ignore = ["tests.mirror-source-structure", '
+            '"tests.core-behavior-resolves-from-container", '
+            '"packages.init-files-are-empty"]'
+        ),
     )
     _write(
         tmp_path / "src" / "demo_service" / "core" / "tasks" / "services" / "title_service.py",
@@ -463,13 +488,21 @@ def test_check_json_emits_versioned_machine_readable_diagnostics(
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 1
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     assert payload["summary"] == {"errors": 1, "warnings": 0}
     assert payload["diagnostics"] == [
         {
             "column": 1,
             "line": 3,
             "message": "missing scoped Example docstring",
+            "hint": (
+                "Add a scoped class docstring with a concrete Example: section that "
+                "contains real code or usage."
+            ),
+            "documentation_url": (
+                "https://specx.dev/docs/reference/architecture-rules/"
+                "#classes_require_example_docstrings"
+            ),
             "path": "src/demo_service/core/tasks/services/title_service.py",
             "rule_id": "classes.require-example-docstrings",
             "severity": "error",
@@ -515,6 +548,34 @@ def test_check_rejects_unknown_configuration(
     assert message in error
 
 
+def test_check_json_emits_versioned_machine_readable_configuration_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_passing_project(tmp_path, tool_specx="unknown = true")
+
+    exit_code = main(["check", str(tmp_path), "--output-format", "json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+    assert exit_code == 2
+    assert captured.out == ""
+    assert payload == {
+        "command": "check",
+        "error": {
+            "available": [],
+            "code": "configuration.error",
+            "details": {},
+            "hint": None,
+            "message": "unknown [tool.specx] keys: ['unknown']",
+            "suggestions": [],
+        },
+        "exit_code": 2,
+        "root": str(tmp_path.resolve()),
+        "version": 2,
+    }
+
+
 def test_check_rejects_malformed_pyproject(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -525,6 +586,63 @@ def test_check_rejects_malformed_pyproject(
 
     assert exit_code == 2
     assert "invalid pyproject.toml" in capsys.readouterr().err
+
+
+def test_check_loads_exact_call_policy_names(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_passing_project(
+        tmp_path,
+        tool_specx=(
+            'select = []\n\n[tool.specx.call-policy]\nextend-allowed-functions = ["asyncio.gather"]'
+        ),
+    )
+
+    exit_code = main(["check", str(tmp_path)])
+
+    assert exit_code == 0
+    assert "specx checks passed" in capsys.readouterr().out
+
+
+def test_check_rejects_wildcard_call_policy_name(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_passing_project(
+        tmp_path,
+        tool_specx=(
+            'select = []\n\n[tool.specx.call-policy]\nextend-allowed-functions = ["asyncio.*"]'
+        ),
+    )
+
+    exit_code = main(["check", str(tmp_path)])
+
+    assert exit_code == 2
+    assert "exact dotted Python names" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "value",
+    ['"asyncio.gather"', '["asyncio.gather", ""]'],
+)
+def test_check_reports_nested_path_for_invalid_call_policy_type_or_item(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    value: str,
+) -> None:
+    _write_passing_project(
+        tmp_path,
+        tool_specx=(f"[tool.specx.call-policy]\nextend-allowed-functions = {value}"),
+    )
+
+    exit_code = main(["check", str(tmp_path)])
+
+    assert exit_code == 2
+    assert (
+        "tool.specx.call-policy.extend-allowed-functions must be an array of non-empty strings"
+        in capsys.readouterr().err
+    )
 
 
 def test_check_requires_package_override_when_discovery_is_ambiguous(
@@ -581,6 +699,9 @@ def test_rule_list_and_explain_show_metadata(capsys: pytest.CaptureFixture[str])
     assert "Family: fastapi" in explained
     assert "Enabled by default: no" in explained
     assert "Required project surface: delivery/fastapi" in explained
+    assert "Remediation:" in explained
+    assert "Documentation: https://specx.dev/docs/reference/architecture-rules/" in explained
+    assert "Detection boundary:" in explained
 
 
 def test_rule_explain_rejects_unknown_rule(capsys: pytest.CaptureFixture[str]) -> None:
@@ -603,6 +724,7 @@ def _write_passing_project(project_root: Path, *, tool_specx: str = "") -> None:
         "- make check\n"
         "- make lint\n"
         "- make test\n"
+        "- uv run --locked specx check --output-format json\n"
         "- BasePureService\n"
         "- Runtime logging uses `LoggingConfigurator`.\n"
         "- Do not inject loggers.\n",

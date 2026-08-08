@@ -35,6 +35,7 @@ config = SpecxArchitectureConfig(
     package_name="order_service",
     select=frozenset({"ALL"}),
     path_exclusions=("src/order_service/generated/**",),
+    allowed_use_case_functions=frozenset({"asyncio.gather"}),
 )
 
 report = check_specx_architecture(config)
@@ -53,8 +54,8 @@ not fail the assertion.
 | --- | --- |
 | `RuleIdentifier` | Accepted identifier type alias: a built-in ID, string enum, or string. |
 | `SpecxArchitectureReport` | Immutable violations and warnings returned by a check. |
-| `SpecxArchitectureViolation` | Error diagnostic with rule, path, message, location, and optional symbol. |
-| `SpecxArchitectureWarning` | Non-failing diagnostic with rule, path, message, and location. |
+| `SpecxArchitectureViolation` | Error diagnostic with rule, path, message, location, optional symbol, hint, and documentation URL. |
+| `SpecxArchitectureWarning` | Non-failing diagnostic with rule, path, message, location, hint, and documentation URL. |
 | `SpecxArchitectureConfig` | Programmatic checker configuration. |
 | `SpecxConfigurationError` | Invalid architecture or project configuration. |
 | `SpecxRuleId` | Built-in rule identifiers exposed as an enum. |
@@ -72,6 +73,7 @@ not fail the assertion.
 | `disabled_rules` | Exact built-in or custom identifiers to suppress. |
 | `extra_rules` | Tuple of custom rule classes. |
 | `path_exclusions` | Project-relative exclusion patterns. |
+| `allowed_use_case_functions` | Exact qualified function names approved for use-case calls. |
 
 ## Define a custom rule
 
@@ -89,6 +91,7 @@ class RequireLicenseRule(
     """Require every checked service repository to contain its license file."""
 
     id = "project.require-license"
+    remediation = "Add the repository license file."
 
     def check(
         self,
@@ -110,6 +113,9 @@ class RequireLicenseRule(
 Pass the class through `extra_rules=(RequireLicenseRule,)`. Rule IDs must be unique. A rule needs a
 useful class docstring of at least eight words, an identifier-safe family, and any
 `required_project_surface` must be relative without `..` traversal.
+
+Custom rules may omit remediation and public documentation metadata. Built-in rules always provide
+both, and their rule pages remain authoritative for rationale, examples, and detection limits.
 
 `ArchitectureContext` exposes `project_root`, `src_root`, source/core/service path lists, parsed ASTs,
 imports, aliases, and Makefile targets. Custom rules are Python-only; the CLI's TOML loader does not

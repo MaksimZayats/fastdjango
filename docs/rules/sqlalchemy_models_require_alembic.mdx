@@ -1,0 +1,81 @@
+export const ruleId = 'sqlalchemy.models-require-alembic'
+export const summary = 'Require Alembic configuration, revisions, commands, and tests for concrete models.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="sqlalchemy_models_require_alembic"></span>
+
+## `sqlalchemy.models-require-alembic`
+
+Require Alembic configuration, revisions, commands, and tests for concrete models.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+A concrete relational model changes the database contract and must be represented by reviewable, testable migrations.
+
+### Failing example
+
+```python
+class OrderModel(BaseSQLAlchemyModel):
+    pass  # no Alembic revision or migration test
+```
+
+### Passing example
+
+```python
+class OrderModel(BaseSQLAlchemyModel):
+    pass  # Alembic config, revision, Make commands, and integration test exist
+
+# migrations/versions/2026_08_08_add_orders.py
+from alembic import op
+
+revision = "2026_08_08_add_orders"
+down_revision = None
+
+def upgrade() -> None:
+    op.create_table("orders")
+```
+
+### Detection notes
+
+When a concrete model exists, this rule parses Alembic configuration and Python imports for
+Alembic-qualified configuration and migration calls. It recognizes models descending from the specx
+SQLAlchemy base or a project `sqlalchemy.orm.DeclarativeBase`.
+
+An environment entrypoint must be invoked during Alembic module import, not only behind an
+`if __name__ == "__main__"` guard. Every passing path through that entrypoint must configure the
+Alembic context and run migrations on the same path. Standard async Alembic helper and `run_sync`
+callback chains are followed statically.
+
+An operational revision declares both `revision` and `down_revision`, defines `upgrade` and
+`downgrade`, and performs a recognized forward migration effect on every passing upgrade path.
+Read-only access such as `op.get_bind()` is not sufficient; direct operations and operations through
+`op.batch_alter_table` count.
+
+The migration integration module needs one executable test whose every passing path both upgrades to
+head and performs a drift check. Module-, class-, or function-level unconditional pytest skip/xfail
+markers disable evidence. Statically false conditional markers remain eligible. Calls inside
+`pytest.raises`, `contextlib.suppress`, or exception handlers that can swallow failures do not count,
+and calls after exhaustive return/raise control flow are unreachable. Runtime `pytest.skip()` and
+`pytest.xfail()` calls terminate evidence, including aliases and reachable short-circuit expressions;
+ordinary `except Exception` handlers do not catch those outcomes, while bare handlers and explicit
+`BaseException` handlers do, both at module import and inside tests. A compatible handler consumes
+the caught outcome, while its `finally` block still runs and may introduce a new terminal outcome.
+Reachable module-import calls to those APIs or
+`pytest.importorskip()` invalidate the integration module, including calls in class bodies, function
+decorators and defaults, lambda defaults, assignment aliases, and invoked local helper chains.
+Helper-local aliases follow source-order and rebinding semantics. Statically dead or short-circuited
+calls do not, and deferred function and lambda bodies are not executed during import. Boolean
+short-circuiting, conditional expressions, and potentially empty comprehensions must actually
+guarantee a call before it contributes evidence.
+
+The rule also shell-tokenizes `migrate`, `makemigrations`, and `migration-check` recipes and requires
+them to invoke Alembic directly. Comments, `echo`, dead branches, swallowed failures, rebound Alembic
+imports, and uncalled helpers do not count. Common direct runners such as
+`uv run --locked alembic`, `env NAME=value alembic`, and absolute Alembic executables count.
+Make's `-` ignore-errors prefix and shell constructs that can replace Alembic's exit status, such as
+`|| true`, `; true`, backgrounding, or an unchecked pipeline, do not count. Silent (`@`) and forced
+recursive (`+`) Make prefixes remain valid when failures still propagate.

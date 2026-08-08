@@ -1,4 +1,0 @@
-interface:
-  display_name: "specx Project Tooling"
-  short_description: "Set up strict Python tooling"
-  default_prompt: "Use $specx-project-tooling to add strict uv, Ruff, mypy, and pytest tooling."

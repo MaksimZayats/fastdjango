@@ -38,6 +38,7 @@ select = ["ALL"]
 ignore = [
     "COM812", # Missing trailing comma.
     "COM819", # Prohibited trailing comma.
+    "CPY001", # Missing copyright notice; the project has no copyright-header policy.
     "D100", # Missing docstring in a public module.
     "D203", # Incorrect blank line before class.
     "D206", # Docstring tab indentation.

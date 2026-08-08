@@ -98,6 +98,18 @@ def test_documentation_omits_retired_product_messaging() -> None:
     assert violations == []
 
 
+def test_human_facing_text_omits_retired_skill_catalog_and_renderer() -> None:
+    retired_references = ("skills/specx-", "render_architecture_guardrails.py")
+
+    violations = [
+        f"{path}: retired skill-catalog reference"
+        for path, contents in _human_facing_texts()
+        if any(reference in contents for reference in retired_references)
+    ]
+
+    assert violations == []
+
+
 def test_human_facing_text_avoids_em_dashes() -> None:
     em_dash = chr(0x2014)
 

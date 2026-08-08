@@ -19,6 +19,12 @@ ignore = [
 exclude = [
   "src/order_service/generated/**",
 ]
+
+[tool.specx.project]
+container-factory = "order_service.ioc.container:get_container"
+
+[tool.specx.call-policy]
+extend-allowed-functions = ["asyncio.gather"]
 ```
 
 Unknown keys and values of the wrong type are configuration errors.
@@ -32,6 +38,8 @@ Unknown keys and values of the wrong type are configuration errors.
 | `extend-select` | array of strings | Add rules to the current selection. |
 | `ignore` | array of exact rule IDs | Disable selected rules. |
 | `exclude` | array of globs | Skip matching Python paths. |
+| `project` | table | Optional project-management runtime configuration. |
+| `call-policy` | table | Exact function exceptions for use-case orchestration. |
 
 Without `package`, specx requires exactly one importable directory below `src/` that contains Python
 files. Set the key for repositories with multiple packages. One invocation still checks one package;
@@ -60,6 +68,14 @@ Exclusions are project-relative Python `fnmatch` patterns applied while scanning
 Use them for generated code that the project cannot reshape. Prefer a narrow path to disabling a rule
 for handwritten code.
 
+## Call policy
+
+`[tool.specx.call-policy].extend-allowed-functions` accepts exact qualified Python names only. For
+example, `asyncio.gather` approves that one function in use cases. Unqualified names, wildcard
+patterns, empty segments, and keyword segments are configuration errors. Constructors, injected
+collaborator calls, and manager-owned unit-of-work calls do not need allowlist entries. Services may
+call deterministic pure functions; the ambient-runtime rule separately rejects known effect APIs.
+
 ## Python API names
 
 The equivalent `SpecxArchitectureConfig` fields are named differently in two places:
@@ -69,7 +85,16 @@ The equivalent `SpecxArchitectureConfig` fields are named differently in two pla
 | `ignore` | `disabled_rules` |
 | `exclude` | `path_exclusions` |
 | `extend-select` | `extend_select` |
+| `call-policy.extend-allowed-functions` | `allowed_use_case_functions` |
 
 `extra_rules` is available only in Python configuration. TOML does not import project rule classes.
+
+## Project runtime
+
+`specx project use-case run` defaults to
+`<package>.ioc.container:get_container`. Set `container-factory` under
+`[tool.specx.project]` only when the project uses another import path. The value must use
+`module:symbol` syntax and return a `diwire.Container`. Static list and show commands never import
+the factory or application package.
 
 <NextPrev current="reference-configuration" />

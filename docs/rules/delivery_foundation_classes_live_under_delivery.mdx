@@ -1,0 +1,36 @@
+export const ruleId = 'delivery.foundation-classes-live-under-delivery'
+export const summary = 'Place delivery foundation subclasses under the top-level delivery package.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="delivery_foundation_classes_live_under_delivery"></span>
+
+## `delivery.foundation-classes-live-under-delivery`
+
+Place delivery foundation subclasses under the top-level delivery package.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Controllers, delivery services, schemas, and lifecycles translate runtime protocols and therefore belong at the delivery edge.
+
+### Failing example
+
+```python
+class OrderController(BaseController):
+    pass  # core/orders/controllers/order.py
+```
+
+### Passing example
+
+```python
+class OrderController(BaseController):
+    pass  # delivery/http/controllers/order.py
+```
+
+### Detection notes
+
+Follows path-qualified project inheritance from controller, delivery-service, schema, and lifecycle
+bases. Abstract and `Base...` project extensions remain delivery types and are checked too.

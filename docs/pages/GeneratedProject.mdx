@@ -62,6 +62,23 @@ uv add specx diwire
 uv add --dev mypy pytest ruff
 ```
 
+Generated `AGENTS.md` documents this project's shape, entrypoints, and executable commands. It tells
+agents to run `specx check --output-format json` and follow diagnostic hints; architecture policy
+remains in the checker and public rule pages rather than being duplicated in the project file.
+
+The initialized health action is immediately visible and runnable through the project management
+CLI:
+
+```sh
+uv run specx project component list --output-format json
+uv run specx project use-case show health/check-health --output-format json
+uv run specx project use-case run health/check-health
+```
+
+For automation, add `specx project --error-format json ...` so failures are also versioned JSON on
+stderr. Project commands can be run from nested directories; they resolve the nearest
+`pyproject.toml` ancestor.
+
 ## Naming behavior
 
 Project names normalize to lowercase ASCII kebab-case. Import packages replace hyphens with

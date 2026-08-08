@@ -1,0 +1,4 @@
+interface:
+  display_name: "specx"
+  short_description: "Navigate projects through executable specx checks"
+  default_prompt: "Use $specx to inspect this project, follow structured specx diagnostics, and verify the result."

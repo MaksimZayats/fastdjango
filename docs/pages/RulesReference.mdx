@@ -9,37 +9,48 @@ import Rule06 from "../rules/use_cases_no_entity_imports_or_returns.mdx"
 import Rule07 from "../rules/use_cases_return_dtos.mdx"
 import Rule08 from "../rules/dtos_result_dtos_live_under_dtos.mdx"
 import Rule09 from "../rules/use_cases_inputs_are_local_commands_or_queries.mdx"
-import Rule10 from "../rules/use_cases_commands_and_queries_live_local.mdx"
-import Rule11 from "../rules/capabilities_placement_and_suffix.mdx"
-import Rule12 from "../rules/capabilities_no_workflows_or_port_roles.mdx"
-import Rule13 from "../rules/gateways_ports_and_implementations_placement.mdx"
-import Rule14 from "../rules/gateways_external_effects_and_no_entity_returns.mdx"
-import Rule15 from "../rules/use_cases_queries_do_not_mutate.mdx"
-import Rule16 from "../rules/classes_require_explicit_bases.mdx"
-import Rule17 from "../rules/classes_require_example_docstrings.mdx"
-import Rule18 from "../rules/services_require_service_suffix.mdx"
-import Rule19 from "../rules/services_require_effect_specific_bases.mdx"
-import Rule20 from "../rules/services_no_generic_base_service.mdx"
-import Rule21 from "../rules/services_pure_no_io_or_runtime_state.mdx"
-import Rule22 from "../rules/services_read_no_writes_or_transactions.mdx"
-import Rule23 from "../rules/services_effect_no_owned_transactions_or_delivery.mdx"
-import Rule24 from "../rules/classes_suffix_from_foundation_category.mdx"
-import Rule25 from "../rules/classes_no_raw_common_bases.mdx"
-import Rule26 from "../rules/diwire_container_import_boundary.mdx"
-import Rule27 from "../rules/logging_no_injected_loggers.mdx"
-import Rule28 from "../rules/delivery_routes_use_full_api_v1_paths.mdx"
-import Rule29 from "../rules/sqlalchemy_no_schema_bootstrap_calls.mdx"
-import Rule30 from "../rules/agents_md_documents_commands_and_boundaries.mdx"
-import Rule31 from "../rules/fastapi_agents_md_documents_delivery.mdx"
-import Rule32 from "../rules/tests_mirror_source_structure.mdx"
-import Rule33 from "../rules/tests_fixtures_do_not_bundle_mocks.mdx"
-import Rule34 from "../rules/tests_integration_does_not_mock_internal_collaborators.mdx"
-import Rule35 from "../rules/uow_services_do_not_open_scopes.mdx"
-import Rule36 from "../rules/uow_use_cases_open_at_most_one_scope.mdx"
-import Rule37 from "../rules/uow_use_cases_inject_managers.mdx"
-import Rule38 from "../rules/uow_use_cases_no_direct_repositories_or_infrastructure.mdx"
-import Rule39 from "../rules/uow_ioc_does_not_register_active_uow.mdx"
-import Rule40 from "../rules/packages_init_files_are_empty.mdx"
+import Rule10 from "../rules/use_cases_orchestrate_through_collaborators.mdx"
+import Rule11 from "../rules/core_behavior_no_ambient_runtime_access.mdx"
+import Rule12 from "../rules/core_contracts_use_immutable_dataclasses.mdx"
+import Rule13 from "../rules/core_no_runtime_configuration_or_pydantic.mdx"
+import Rule14 from "../rules/use_cases_commands_and_queries_live_local.mdx"
+import Rule15 from "../rules/capabilities_placement_and_suffix.mdx"
+import Rule16 from "../rules/capabilities_no_workflows_or_port_roles.mdx"
+import Rule17 from "../rules/gateways_ports_and_implementations_placement.mdx"
+import Rule18 from "../rules/gateways_external_effects_and_no_entity_returns.mdx"
+import Rule19 from "../rules/use_cases_queries_do_not_mutate.mdx"
+import Rule20 from "../rules/classes_require_explicit_bases.mdx"
+import Rule21 from "../rules/classes_require_example_docstrings.mdx"
+import Rule22 from "../rules/services_require_service_suffix.mdx"
+import Rule23 from "../rules/services_require_effect_specific_bases.mdx"
+import Rule24 from "../rules/services_no_generic_base_service.mdx"
+import Rule25 from "../rules/services_methods_use_keyword_only_arguments.mdx"
+import Rule26 from "../rules/services_pure_no_io_or_runtime_state.mdx"
+import Rule27 from "../rules/services_read_no_writes_or_transactions.mdx"
+import Rule28 from "../rules/services_effect_no_owned_transactions_or_delivery.mdx"
+import Rule29 from "../rules/classes_suffix_from_foundation_category.mdx"
+import Rule30 from "../rules/classes_no_raw_common_bases.mdx"
+import Rule31 from "../rules/diwire_container_import_boundary.mdx"
+import Rule32 from "../rules/diwire_no_function_injection.mdx"
+import Rule33 from "../rules/logging_no_injected_loggers.mdx"
+import Rule34 from "../rules/delivery_routes_use_full_api_v1_paths.mdx"
+import Rule35 from "../rules/sqlalchemy_no_schema_bootstrap_calls.mdx"
+import Rule36 from "../rules/sqlalchemy_models_live_under_scope_infrastructure.mdx"
+import Rule37 from "../rules/sqlalchemy_models_require_alembic.mdx"
+import Rule38 from "../rules/delivery_foundation_classes_live_under_delivery.mdx"
+import Rule39 from "../rules/agents_md_documents_project_commands.mdx"
+import Rule40 from "../rules/fastapi_agents_md_documents_entrypoint.mdx"
+import Rule41 from "../rules/tests_mirror_source_structure.mdx"
+import Rule42 from "../rules/tests_core_behavior_resolves_from_container.mdx"
+import Rule43 from "../rules/tests_fixtures_do_not_bundle_mocks.mdx"
+import Rule44 from "../rules/tests_integration_does_not_mock_internal_collaborators.mdx"
+import Rule45 from "../rules/uow_services_do_not_open_scopes.mdx"
+import Rule46 from "../rules/uow_use_cases_open_at_most_one_scope.mdx"
+import Rule47 from "../rules/uow_use_cases_inject_managers.mdx"
+import Rule48 from "../rules/uow_use_cases_no_direct_repositories_or_infrastructure.mdx"
+import Rule49 from "../rules/uow_ioc_does_not_register_active_uow.mdx"
+import Rule50 from "../rules/packages_init_files_are_empty.mdx"
+import Rule51 from "../rules/use_cases_one_per_module.mdx"
 
 <Meta title="Reference/Architecture rules" />
 
@@ -63,6 +74,10 @@ the installed package. Rules are enabled by default unless their page marks them
 | [`use-cases.return-dtos`](#use_cases_return_dtos) | Default | Require use cases to return DTOs instead of entities or raw values. |
 | [`dtos.result-dtos-live-under-dtos`](#dtos_result_dtos_live_under_dtos) | Default | Require DTO classes to live in the scope `dtos` package. |
 | [`use-cases.inputs-are-local-commands-or-queries`](#use_cases_inputs_are_local_commands_or_queries) | Default | Require every use case to accept one same-file command or query input. |
+| [`use-cases.orchestrate-through-collaborators`](#use_cases_orchestrate_through_collaborators) | Default | Require use-case execution to orchestrate injected collaborators and typed objects. |
+| [`core.behavior-no-ambient-runtime-access`](#core_behavior_no_ambient_runtime_access) | Default | Prevent use cases and services from obtaining ambient runtime behavior directly. |
+| [`core.contracts-use-immutable-dataclasses`](#core_contracts_use_immutable_dataclasses) | Default | Require project core contracts and entities to use immutable keyword-only dataclasses. |
+| [`core.no-runtime-configuration-or-pydantic`](#core_no_runtime_configuration_or_pydantic) | Default | Keep Pydantic and runtime configuration objects outside the project core layer. |
 | [`use-cases.commands-and-queries-live-local`](#use_cases_commands_and_queries_live_local) | Default | Require command and query classes to be defined in use-case modules. |
 | [`capabilities.placement-and-suffix`](#capabilities_placement_and_suffix) | Default | Keep capability classes in capability packages with capability naming. |
 | [`capabilities.no-workflows-or-port-roles`](#capabilities_no_workflows_or_port_roles) | Default | Prevent capabilities from pretending to be workflows or ports. |
@@ -74,18 +89,24 @@ the installed package. Rules are enabled by default unless their page marks them
 | [`services.require-service-suffix`](#services_require_service_suffix) | Default | Require classes in service packages to use the `Service` suffix. |
 | [`services.require-effect-specific-bases`](#services_require_effect_specific_bases) | Default | Require core services to choose pure, read, or effect service bases. |
 | [`services.no-generic-base-service`](#services_no_generic_base_service) | Default | Reject generic `BaseService` in favor of effect-specific service bases. |
+| [`services.methods-use-keyword-only-arguments`](#services_methods_use_keyword_only_arguments) | Default | Require public service methods to expose explicit keyword-only arguments after self. |
 | [`services.pure-no-io-or-runtime-state`](#services_pure_no_io_or_runtime_state) | Default | Keep pure services deterministic and independent from IO or runtime state. |
 | [`services.read-no-writes-or-transactions`](#services_read_no_writes_or_transactions) | Default | Keep read services from writing data or owning transactions. |
 | [`services.effect-no-owned-transactions-or-delivery`](#services_effect_no_owned_transactions_or_delivery) | Default | Keep effect services inside use-case-owned transaction boundaries. |
 | [`classes.suffix-from-foundation-category`](#classes_suffix_from_foundation_category) | Default | Require class names to use the suffix implied by their foundation base. |
 | [`classes.no-raw-common-bases`](#classes_no_raw_common_bases) | Default | Reject raw common framework/base classes outside the foundation layer. |
 | [`diwire.container-import-boundary`](#diwire_container_import_boundary) | Default | Restrict `diwire.Container` imports to composition and tests. |
+| [`diwire.no-function-injection`](#diwire_no_function_injection) | Default | Reject function-level DI while preserving constructor fields and ordinary fixtures. |
 | [`logging.no-injected-loggers`](#logging_no_injected_loggers) | Default | Keep logger naming local to the class that emits log records. |
 | [`delivery.routes-use-full-api-v1-paths`](#delivery_routes_use_full_api_v1_paths) | Opt-in `fastapi` | Require public business route registrations to use full `/api/v1/...` paths. |
 | [`sqlalchemy.no-schema-bootstrap-calls`](#sqlalchemy_no_schema_bootstrap_calls) | Default | Reject SQLAlchemy schema bootstrap calls in source and tests. |
-| [`agents-md.documents-commands-and-boundaries`](#agents_md_documents_commands_and_boundaries) | Default | Keep generated-project agent guidance aligned with commands and boundaries. |
-| [`fastapi.agents-md-documents-delivery`](#fastapi_agents_md_documents_delivery) | Opt-in `fastapi` | Require FastAPI projects to document their delivery entrypoint and lifecycle. |
+| [`sqlalchemy.models-live-under-scope-infrastructure`](#sqlalchemy_models_live_under_scope_infrastructure) | Default | Place concrete SQLAlchemy models under their owning scope infrastructure package. |
+| [`sqlalchemy.models-require-alembic`](#sqlalchemy_models_require_alembic) | Default | Require Alembic configuration, revisions, commands, and tests for concrete models. |
+| [`delivery.foundation-classes-live-under-delivery`](#delivery_foundation_classes_live_under_delivery) | Default | Place delivery foundation subclasses under the top-level delivery package. |
+| [`agents-md.documents-project-commands`](#agents_md_documents_project_commands) | Default | Keep generated agent guidance aligned with real project paths and runnable commands. |
+| [`fastapi.agents-md-documents-entrypoint`](#fastapi_agents_md_documents_entrypoint) | Opt-in `fastapi` | Require FastAPI projects to document the project-specific application entrypoint. |
 | [`tests.mirror-source-structure`](#tests_mirror_source_structure) | Default | Require meaningful generated-service tests to mirror source modules. |
+| [`tests.core-behavior-resolves-from-container`](#tests_core_behavior_resolves_from_container) | Default | Require mirrored core-behavior tests to resolve every concrete target from DIWire. |
 | [`tests.fixtures-do-not-bundle-mocks`](#tests_fixtures_do_not_bundle_mocks) | Default | Reject grouped mock fixtures in generated-service tests. |
 | [`tests.integration-does-not-mock-internal-collaborators`](#tests_integration_does_not_mock_internal_collaborators) | Default | Require integration tests to exercise the real internal application graph. |
 | [`uow.services-do-not-open-scopes`](#uow_services_do_not_open_scopes) | Default | Reject service-owned unit-of-work scopes. |
@@ -94,6 +115,7 @@ the installed package. Rules are enabled by default unless their page marks them
 | [`uow.use-cases-no-direct-repositories-or-infrastructure`](#uow_use_cases_no_direct_repositories_or_infrastructure) | Default | Require persistence access to flow through use-case-owned UoW scopes. |
 | [`uow.ioc-does-not-register-active-uow`](#uow_ioc_does_not_register_active_uow) | Default | Reject active unit-of-work registrations in the IOC container. |
 | [`packages.init-files-are-empty`](#packages_init_files_are_empty) | Default | Require package `__init__.py` files to stay empty. |
+| [`use-cases.one-per-module`](#use_cases_one_per_module) | Default | Require each managed use-case module to define only one use case. |
 
 <Rule01 />
 
@@ -174,6 +196,28 @@ the installed package. Rules are enabled by default unless their page marks them
 <Rule39 />
 
 <Rule40 />
+
+<Rule41 />
+
+<Rule42 />
+
+<Rule43 />
+
+<Rule44 />
+
+<Rule45 />
+
+<Rule46 />
+
+<Rule47 />
+
+<Rule48 />
+
+<Rule49 />
+
+<Rule50 />
+
+<Rule51 />
 
 ## Enforcement boundary
 

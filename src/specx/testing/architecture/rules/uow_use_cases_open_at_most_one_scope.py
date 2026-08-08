@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_base_name_index,
+    class_definition_base_index,
     class_injected_unit_of_work_manager_field_names,
     execute_methods_with_classes,
     uow_manager_context_count,
@@ -11,7 +11,7 @@ from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._shared import (
     ArchitectureRuleBase,
-    is_use_case_class,
+    is_use_case_class_at,
     violation,
 )
 
@@ -27,14 +27,19 @@ class UseCasesOpenAtMostOneUnitOfWorkScopeRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in (context.src_root / "core").glob("*/use_cases/**/*.py"):
             if path.name == "__init__.py" or path not in context.ast_project.files:
                 continue
             tree = context.tree(path)
             aliases = context.aliases(path)
             for class_node, execute in execute_methods_with_classes(tree):
-                if not is_use_case_class(class_node, aliases, base_index):
+                if not is_use_case_class_at(
+                    class_node,
+                    path=path,
+                    context=context,
+                    definition_index=definition_index,
+                ):
                     continue
                 manager_fields = class_injected_unit_of_work_manager_field_names(
                     class_node,

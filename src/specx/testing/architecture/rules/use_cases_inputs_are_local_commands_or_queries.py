@@ -7,14 +7,14 @@ from specx.testing.architecture.context import (
     USE_CASE_INPUT_BASE_NAMES,
     ArchitectureContext,
     annotation_name,
-    class_base_name_index,
+    class_definition_base_index,
     class_direct_base_names,
-    class_has_foundation_base,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._shared import (
     ArchitectureRuleBase,
+    is_use_case_class_at,
     violation,
 )
 
@@ -30,7 +30,7 @@ class UseCaseInputsAreLocalCommandsOrQueriesRule(ArchitectureRuleBase):
 
     def check(self, context: ArchitectureContext) -> tuple[SpecxArchitectureViolation, ...]:
         violations: list[SpecxArchitectureViolation] = []
-        base_index = class_base_name_index(context)
+        definition_index = class_definition_base_index(context)
         for path in (context.src_root / "core").glob("*/use_cases/**/*.py"):
             if path.name == "__init__.py" or path not in context.ast_project.files:
                 continue
@@ -53,10 +53,11 @@ class UseCaseInputsAreLocalCommandsOrQueriesRule(ArchitectureRuleBase):
                 )
                 if input_base is not None:
                     local_inputs[node.name] = input_base
-                if "BaseUseCase" in base_names or class_has_foundation_base(
-                    node.name,
-                    "BaseUseCase",
-                    base_index,
+                if is_use_case_class_at(
+                    node,
+                    path=path,
+                    context=context,
+                    definition_index=definition_index,
                 ):
                     use_cases.append(node)
 

@@ -12,21 +12,17 @@ Start from a command use case with a real persistence need and a clean `make che
 production database family before generating configuration or tests; do not substitute SQLite when
 dialect behavior matters.
 
-Install the specx skills before following this procedure.
-
 ## 1. Give the agent the complete boundary
 
-Name the related skills and state the transaction outcome:
+State the transaction outcome and require executable verification:
 
 ```text
-Use $specx-add-infrastructure-adapter, $specx-sqlalchemy-migrations,
-$specx-diwire-composition, and $specx-tests.
-
 Persist CreateOrderUseCase with async SQLAlchemy and PostgreSQL. The use case must open one
 OrderUnitOfWorkManager scope and return CreateOrderDTO only after successful commit. Add the
 repository and unit-of-work ports, project-local SQLAlchemy base, model and adapter, app-owned
 session factory, Alembic migration, DI binding, core integration test, and migration drift tests.
-Do not add or change HTTP delivery.
+Do not add or change HTTP delivery. Follow `specx check --output-format json` diagnostics and run
+the migration integration checks.
 ```
 
 Replace the action and database family with the project decision. If the command also calls an

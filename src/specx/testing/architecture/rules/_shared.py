@@ -9,9 +9,9 @@ from specx.testing.architecture.context import (
     active_uow_names_from_manager_fields,
     annotation_name,
     attribute_chain,
-    class_base_name_index,
-    class_direct_base_names,
-    class_has_foundation_base,
+    class_definition_base_index,
+    class_has_foundation_base_at,
+    class_has_foundation_base_from_path,
     class_injected_unit_of_work_manager_field_names,
     injected_type_name,
     module_parts,
@@ -93,16 +93,19 @@ def python_package_directories(
     return tuple(sorted(directories))
 
 
-def is_use_case_class(
+def is_use_case_class_at(
     class_node: ast.ClassDef,
-    aliases: dict[str, str],
-    class_base_name_index: dict[str, set[str]],
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
 ) -> bool:
-    base_names = class_direct_base_names(class_node, aliases)
-    return "BaseUseCase" in base_names or class_has_foundation_base(
-        class_node.name,
+    return class_has_foundation_base_at(
+        class_node,
         "BaseUseCase",
-        class_base_name_index,
+        source_path=path,
+        context=context,
+        definition_index=definition_index,
     )
 
 
@@ -127,7 +130,10 @@ def is_scope_technical_import(module: str) -> bool:
 def forbidden_use_case_persistence_dependency_fields(
     class_node: ast.ClassDef,
     aliases: dict[str, str],
-    class_base_name_index: dict[str, set[str]],
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
 ) -> list[str]:
     fields: list[str] = []
     for child in class_node.body:
@@ -140,7 +146,9 @@ def forbidden_use_case_persistence_dependency_fields(
 
         if _is_forbidden_use_case_persistence_dependency(
             injected_name,
-            class_base_name_index,
+            source_path=source_path,
+            context=context,
+            definition_index=definition_index,
         ):
             annotation = annotation_name(child.annotation, aliases)
             fields.append(f"{child.target.id}:{annotation}")
@@ -149,12 +157,17 @@ def forbidden_use_case_persistence_dependency_fields(
 
 def _is_forbidden_use_case_persistence_dependency(
     dependency_name: str,
-    class_base_name_index: dict[str, set[str]],
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
 ) -> bool:
-    if dependency_name.endswith("Repository") or class_has_foundation_base(
+    if dependency_name.endswith("Repository") or class_has_foundation_base_from_path(
         dependency_name,
         "BaseRepository",
-        class_base_name_index,
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
     ):
         return True
 
@@ -248,7 +261,7 @@ def is_injected_logger_annotation(
         return False
     if not isinstance(annotation, ast.Subscript):
         return False
-    if not annotation_name(annotation.value, aliases).endswith("Injected"):
+    if annotation_name(annotation.value, aliases) != "Injected":
         return False
 
     return is_logging_logger_expression(annotation.slice, aliases, imports)
@@ -262,7 +275,7 @@ def _is_injected_container_annotation(
         return False
     if not isinstance(annotation, ast.Subscript):
         return False
-    if not annotation_name(annotation.value, aliases).endswith("Injected"):
+    if annotation_name(annotation.value, aliases) != "Injected":
         return False
 
     return _is_diwire_container_expression(annotation.slice, aliases)
@@ -295,14 +308,23 @@ def class_injects_diwire_container(
 def class_can_inject_container(
     relative: Path,
     class_node: ast.ClassDef,
-    class_base_name_index: dict[str, set[str]],
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
 ) -> bool:
     return (
         len(relative.parts) == 3
         and relative.parts[0] == "delivery"
         and relative.name == "lifecycle.py"
         and class_node.name.endswith("Lifecycle")
-        and class_has_foundation_base(class_node.name, "BaseLifecycle", class_base_name_index)
+        and class_has_foundation_base_at(
+            class_node,
+            "BaseLifecycle",
+            source_path=source_path,
+            context=context,
+            definition_index=definition_index,
+        )
     )
 
 
@@ -364,16 +386,6 @@ def project_uses_alembic(context: ArchitectureContext) -> bool:
     return (context.project_root / "alembic.ini").exists() or (
         context.project_root / "migrations"
     ).exists()
-
-
-def project_uses_foundation_base(
-    class_base_names: dict[str, set[str]],
-    foundation_base: str,
-) -> bool:
-    return any(
-        class_has_foundation_base(class_name, foundation_base, class_base_names)
-        for class_name in class_base_names
-    )
 
 
 def mirrored_test_paths(
@@ -500,7 +512,7 @@ def required_unit_test_source_paths(context: ArchitectureContext) -> tuple[Path,
 
 
 def required_integration_test_source_paths(context: ArchitectureContext) -> tuple[Path, ...]:
-    base_index = class_base_name_index(context)
+    definition_index = class_definition_base_index(context)
     core_root = context.src_root / "core"
     return tuple(
         path
@@ -509,19 +521,24 @@ def required_integration_test_source_paths(context: ArchitectureContext) -> tupl
         and path.is_relative_to(core_root)
         and len((relative := path.relative_to(core_root)).parts) >= 3
         and relative.parts[1] == "use_cases"
-        and _module_has_persistence_use_case(context, path, base_index)
+        and _module_has_persistence_use_case(context, path, definition_index)
     )
 
 
 def _module_has_persistence_use_case(
     context: ArchitectureContext,
     path: Path,
-    base_index: dict[str, set[str]],
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
 ) -> bool:
     tree = context.tree(path)
     aliases = context.aliases(path)
     return any(
-        is_use_case_class(class_node, aliases, base_index)
+        is_use_case_class_at(
+            class_node,
+            path=path,
+            context=context,
+            definition_index=definition_index,
+        )
         and bool(class_injected_unit_of_work_manager_field_names(class_node, aliases))
         for class_node in ast.walk(tree)
         if isinstance(class_node, ast.ClassDef)

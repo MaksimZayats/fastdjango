@@ -8,18 +8,18 @@ import { CliIcon, FoundationIcon, GuardrailsIcon, SkillsIcon } from "@storybookC
 <Meta title="Overview/Introduction" />
 
 <Title>specx</Title>
-<Subtitle>Agent skills and executable architecture rules for Python services.</Subtitle>
+<Subtitle>Executable architecture rules and typed project foundations for Python services.</Subtitle>
 
 specx gives coding agents a concrete way to build and change Python backends without letting
 framework, persistence, and application concerns drift together. It combines four surfaces:
 
-- **Agent skills** describe how to structure projects and implement common backend work.
+- **Structured diagnostics** explain architecture failures and link to authoritative rule guides.
 - **The project initializer** renders a strict framework-neutral starting point.
 - **Foundation classes** give project classes explicit architectural categories.
 - **Architecture checks** inspect the result and report semantic rule IDs.
 
-The skills guide the change. The checks inspect the result. Neither replaces normal design review,
-tests, or framework documentation.
+The checks are the correctness contract. The optional `specx` skill only helps an agent navigate
+these surfaces; it does not replace normal design review, tests, or framework documentation.
 
 ## Start here
 
@@ -41,7 +41,7 @@ tests, or framework documentation.
       href="/docs/guides/install-agent-skills/"
       icon={<SkillsIcon />}
       title="Agent skills"
-      subtitle="Install the catalog and choose the right workflow."
+      subtitle="Install the optional project-navigation workflow."
     />
     <DocsCard
       href="/docs/reference/architecture-rules/"
@@ -67,8 +67,7 @@ disabling most of the rule set.
 
 ## Typical ways to use it
 
-- Start a new service with `specx init`, then ask an agent to apply the relevant specx skill.
+- Start a new service with `specx init`, then use project commands and structured diagnostics.
 - Install the Python package in an existing `src/`-layout service and introduce guardrails gradually.
-- Use the foundation classes without the skills when humans own the implementation workflow.
-- Install the skills without the package for design guidance, then add executable checks when the
-  project is ready.
+- Use the foundation classes and checks without installing any agent skill.
+- Install the optional skill when an agent benefits from a concise project-navigation workflow.
