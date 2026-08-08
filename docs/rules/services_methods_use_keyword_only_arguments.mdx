@@ -42,4 +42,6 @@ have no implicit receiver. Ordinary positional parameters and `*args` violate th
 Property getter, setter, and deleter functions are descriptor accessors rather than directly called
 service methods, so their runtime-mandated accessor parameters are exempt, including qualified accessor
 overrides inherited from an explicitly selected project base or mixin. Abstractness is aggregated over
-the effective getter, setter, and deleter components before concrete services are checked.
+the effective getter, setter, and deleter components before concrete services are checked. Accessors
+supplied through exact `property(...)` positional or `fget`/`fset`/`fdel` arguments receive the same
+descriptor exemption.

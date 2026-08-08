@@ -327,6 +327,52 @@ def test_dead_module_pytest_outcome_preserves_container_evidence(
     assert _check(tmp_path).violations == ()
 
 
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "def helper(optional=pytest.importorskip('optional_dependency')):\n    pass\n",
+        "async def helper(*, optional=pytest.importorskip('optional_dependency')):\n    pass\n",
+        "@pytest.skip('disabled', allow_module_level=True)\ndef helper():\n    pass\n",
+        "helper = lambda optional=pytest.importorskip('optional_dependency'): None\n",
+    ],
+)
+def test_import_time_definition_outcome_disables_container_evidence(
+    tmp_path: Path,
+    definition: str,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        f"import pytest\n{definition}\n{_test_source()}",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+def test_deferred_function_and_lambda_bodies_preserve_container_evidence(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "def deferred():\n"
+        "    pytest.skip('disabled', allow_module_level=True)\n"
+        "callback = lambda: pytest.xfail('disabled')\n\n"
+        f"{_test_source()}",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
 def test_conditionally_reachable_module_pytest_outcome_disables_container_evidence(
     tmp_path: Path,
 ) -> None:

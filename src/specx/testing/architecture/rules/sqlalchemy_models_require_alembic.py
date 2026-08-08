@@ -845,7 +845,18 @@ def _flow_statement(
             batch_aliases=batch_aliases,
         )
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return paths
+        defined = paths
+        for expression in _function_definition_expressions(statement):
+            defined = _add_expression_evidence(
+                defined,
+                expression,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
+        return defined
     return _add_expression_evidence(
         paths,
         statement,
@@ -1167,6 +1178,16 @@ def _call_evidence_name(
     ):
         return f"alembic.op.{call.func.attr}"
     return _qualified_call_name(call, bindings, scope=scope)
+
+
+def _function_definition_expressions(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.expr, ...]:
+    return (
+        *function.decorator_list,
+        *function.args.defaults,
+        *(default for default in function.args.kw_defaults if default is not None),
+    )
 
 
 def _batch_operation_aliases(
@@ -1698,14 +1719,19 @@ def _qualified_call_name(
         expression = expression.value
     if not isinstance(expression, ast.Name):
         return ast.unparse(call.func)
-    module_wrapper_binding = (
-        _module_binding_before_call(expression.id, call=call, statements=scope.body)
-        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) and scope.name == "<module>"
+    source_binding = (
+        _binding_before_call(
+            expression.id,
+            call=call,
+            statements=scope.body,
+            initial_bindings={} if scope.name == "<module>" else bindings,
+        )
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
         else None
     )
     root = (
-        module_wrapper_binding
-        if module_wrapper_binding is not None
+        source_binding
+        if source_binding is not None
         else expression.id
         if scope is not None and _name_is_shadowed(expression.id, call=call, scope=scope)
         else bindings.get(expression.id, expression.id)
@@ -1713,7 +1739,7 @@ def _qualified_call_name(
     return ".".join((root, *reversed(parts)))
 
 
-def _module_binding_before_call(
+def _binding_before_call(
     name: str,
     *,
     call: ast.Call,
@@ -1726,12 +1752,26 @@ def _module_binding_before_call(
         if isinstance(statement, ast.ClassDef) and any(
             node is call for node in ast.walk(statement)
         ):
-            return _module_binding_before_call(
+            return _binding_before_call(
                 name,
                 call=call,
                 statements=statement.body,
                 initial_bindings=bindings,
             )
+        nested_block = _nested_block_containing_call(statement, call=call)
+        if nested_block is not None:
+            return _binding_before_call(
+                name,
+                call=call,
+                statements=nested_block,
+                initial_bindings=bindings,
+            )
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            node is call
+            for expression in _function_definition_expressions(statement)
+            for node in ast.walk(expression)
+        ):
+            return bindings.get(name)
         if (statement.lineno, statement.col_offset) >= call_position:
             break
         if isinstance(statement, ast.Import):
@@ -1757,6 +1797,35 @@ def _module_binding_before_call(
         if isinstance(statement, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             bindings.pop(statement.name, None)
     return bindings.get(name)
+
+
+def _nested_block_containing_call(
+    statement: ast.stmt,
+    *,
+    call: ast.Call,
+) -> list[ast.stmt] | None:
+    blocks: tuple[list[ast.stmt], ...] = ()
+    if isinstance(statement, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+        blocks = (statement.body, statement.orelse)
+    elif isinstance(statement, (ast.With, ast.AsyncWith)):
+        blocks = (statement.body,)
+    elif isinstance(statement, ast.Try):
+        blocks = (
+            statement.body,
+            *(handler.body for handler in statement.handlers),
+            statement.orelse,
+            statement.finalbody,
+        )
+    elif isinstance(statement, ast.Match):
+        blocks = tuple(case.body for case in statement.cases)
+    return next(
+        (
+            block
+            for block in blocks
+            if any(node is call for child in block for node in ast.walk(child))
+        ),
+        None,
+    )
 
 
 def _name_is_shadowed(

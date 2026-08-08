@@ -929,6 +929,12 @@ def _class_statement_method_groups(
     elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
         targets, value = (statement.target,), statement.value
     if targets:
+        property_declarations = _property_constructor_declarations(
+            value,
+            path=path,
+            context=context,
+            project_functions=project_functions,
+        )
         binding, attached_expression = _attached_method_expression(
             value,
             path=path,
@@ -939,20 +945,22 @@ def _class_statement_method_groups(
         for target in targets:
             if not isinstance(target, ast.Name):
                 continue
-            declarations = (
-                tuple(
-                    ClassMethodDeclaration(
-                        path=function_path,
-                        function=function,
-                        binding=binding,
+            target_declarations = property_declarations
+            if target_declarations is None:
+                target_declarations = (
+                    tuple(
+                        ClassMethodDeclaration(
+                            path=function_path,
+                            function=function,
+                            binding=binding,
+                        )
+                        for function_path, function in attached
                     )
-                    for function_path, function in attached
+                    if attached is not None
+                    else ()
                 )
-                if attached is not None
-                else ()
-            )
             current[target.id] = ClassMethodGroup(
-                declarations=declarations,
+                declarations=target_declarations,
                 always_bound=True,
                 shadows_inherited_name=True,
                 overridden_descriptor_components=frozenset(DESCRIPTOR_COMPONENTS),
@@ -1166,6 +1174,81 @@ def _attached_method_expression(
         }:
             return "class", value.args[0]
     return "instance", value
+
+
+def _property_constructor_declarations(
+    value: ast.expr | None,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+    project_functions: dict[
+        str,
+        tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...],
+    ],
+) -> tuple[ClassMethodDeclaration, ...] | None:
+    if not isinstance(value, ast.Call) or context.qualified_names(path, value.func) not in {
+        frozenset({"builtins.property"}),
+        frozenset({"property"}),
+    }:
+        return None
+    accessors: dict[DescriptorComponent, ast.expr] = {}
+    positional_components: tuple[DescriptorComponent, ...] = (
+        "getter",
+        "setter",
+        "deleter",
+    )
+    for component, expression in zip(
+        positional_components,
+        value.args[:3],
+        strict=False,
+    ):
+        accessors[component] = expression
+    keyword_components: dict[str, DescriptorComponent] = {
+        "fget": "getter",
+        "fset": "setter",
+        "fdel": "deleter",
+    }
+    for keyword in value.keywords:
+        if keyword.arg in keyword_components:
+            accessors[keyword_components[keyword.arg]] = keyword.value
+    declarations: list[ClassMethodDeclaration] = []
+    for component, expression in accessors.items():
+        if isinstance(expression, ast.Lambda):
+            declarations.append(
+                ClassMethodDeclaration(
+                    path=path,
+                    function=_lambda_as_function(expression, component=component),
+                    binding="instance",
+                    descriptor_component=component,
+                )
+            )
+            continue
+        qualified = context.qualified_name(path, expression)
+        declarations.extend(
+            ClassMethodDeclaration(
+                path=function_path,
+                function=function,
+                binding="instance",
+                descriptor_component=component,
+            )
+            for function_path, function in project_functions.get(qualified, ())
+        )
+    return tuple(declarations)
+
+
+def _lambda_as_function(
+    expression: ast.Lambda,
+    *,
+    component: DescriptorComponent,
+) -> ast.FunctionDef:
+    returned = ast.copy_location(ast.Return(value=expression.body), expression.body)
+    function = ast.FunctionDef(
+        name=f"<property-{component}>",
+        args=expression.args,
+        body=[returned],
+        decorator_list=[],
+    )
+    return ast.fix_missing_locations(ast.copy_location(function, expression))
 
 
 def _function_binding(

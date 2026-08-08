@@ -52,6 +52,8 @@ components of properties. A fresh property shadows the inherited descriptor, whi
 `@Base.property.getter`, `setter`, or `deleter` override replaces only that component and preserves
 components from the explicitly selected owner, including a non-first C3 mixin. A property remains
 abstract when any effective accessor is abstract; concrete component overrides update that status.
+Exact `property(...)` assignments map positional or `fget`/`fset`/`fdel` project functions and inline
+lambdas to the same accessor model and create a fresh descriptor shadow.
 Inherited behavior has one diagnostic owner. Statically called nested
 and module-local helper bodies are followed. Dormant nested function, class, and lambda bodies are not
 attributed to the enclosing behavior; their definition-time expressions are. Project-specific wrappers

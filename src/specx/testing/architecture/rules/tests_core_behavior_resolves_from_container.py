@@ -270,7 +270,13 @@ def _module_assignment_alias_outcome_call_ids(
         return None
 
     def visit_node(node: ast.AST, aliases: dict[str, str]) -> None:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for expression in _function_definition_expressions(node):
+                visit_node(expression, aliases)
+            return
+        if isinstance(node, ast.Lambda):
+            for expression in _lambda_definition_expressions(node):
+                visit_node(expression, aliases)
             return
         if isinstance(node, ast.ClassDef):
             visit_block(node.body, {})
@@ -307,12 +313,19 @@ def _module_import_nodes(tree: ast.Module) -> tuple[ast.AST, ...]:
     nodes: list[ast.AST] = []
 
     def visit(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            nodes.append(node)
+            for expression in _function_definition_expressions(node):
+                visit(expression)
+            return
+        if isinstance(node, ast.Lambda):
+            nodes.append(node)
+            for expression in _lambda_definition_expressions(node):
+                visit(expression)
+            return
         if isinstance(
             node,
             (
-                ast.FunctionDef,
-                ast.AsyncFunctionDef,
-                ast.Lambda,
                 ast.ListComp,
                 ast.SetComp,
                 ast.DictComp,
@@ -327,6 +340,23 @@ def _module_import_nodes(tree: ast.Module) -> tuple[ast.AST, ...]:
     for statement in tree.body:
         visit(statement)
     return tuple(nodes)
+
+
+def _function_definition_expressions(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.expr, ...]:
+    return (
+        *function.decorator_list,
+        *function.args.defaults,
+        *(default for default in function.args.kw_defaults if default is not None),
+    )
+
+
+def _lambda_definition_expressions(function: ast.Lambda) -> tuple[ast.expr, ...]:
+    return (
+        *function.args.defaults,
+        *(default for default in function.args.kw_defaults if default is not None),
+    )
 
 
 def _node_is_reachable(
@@ -590,6 +620,16 @@ def _statement_exit_kinds(
         return {"break"}
     if isinstance(statement, ast.Continue):
         return {"continue"}
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if any(
+            _expression_guarantees_terminal_call(
+                expression,
+                terminal_call_ids=terminal_call_ids,
+            )
+            for expression in _function_definition_expressions(statement)
+        ):
+            return {"pytest-outcome"}
+        return {"fall"}
     if isinstance(statement, ast.ClassDef):
         definition_expressions = (
             *statement.decorator_list,
