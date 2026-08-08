@@ -1,0 +1,37 @@
+export const ruleId = 'core.contracts-use-immutable-dataclasses'
+export const summary = 'Require project core contracts and entities to use immutable keyword-only dataclasses.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="core_contracts_use_immutable_dataclasses"></span>
+
+## `core.contracts-use-immutable-dataclasses`
+
+Require project core contracts and entities to use immutable keyword-only dataclasses.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Stable command, query, DTO, and entity contracts are explicit, immutable, and resistant to positional-call drift.
+
+### Failing example
+
+```python
+@dataclass
+class OrderDTO(BaseDTO):
+    order_id: str
+```
+
+### Passing example
+
+```python
+@dataclass(frozen=True, kw_only=True, slots=True)
+class OrderDTO(BaseDTO):
+    order_id: str
+```
+
+### Detection notes
+
+Checks direct or inherited project subclasses and requires all three literal `True` decorator flags.

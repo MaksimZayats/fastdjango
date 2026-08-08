@@ -1,0 +1,41 @@
+export const ruleId = 'use-cases.orchestrate-through-collaborators'
+export const summary = 'Require use-case execution to orchestrate injected collaborators and typed objects.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="use_cases_orchestrate_through_collaborators"></span>
+
+## `use-cases.orchestrate-through-collaborators`
+
+Require use-case execution to orchestrate injected collaborators and typed objects.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Use cases coordinate application policy; reusable behavior belongs behind typed injected collaborators.
+
+### Failing example
+
+```python
+class PlaceOrderUseCase(BaseUseCase):
+    def execute(self, *, command: PlaceOrderCommand) -> OrderDTO:
+        return build_order(command)
+```
+
+### Passing example
+
+```python
+class PlaceOrderUseCase(BaseUseCase):
+    builder: Injected[OrderBuilderService]
+    def execute(self, *, command: PlaceOrderCommand) -> OrderDTO:
+        return self.builder.build(command=command)
+```
+
+### Detection notes
+
+Resolves lexical aliases and shadowing. Statically indexed project classes, built-in types and
+exceptions, inherited injected collaborator calls, manager-owned UoW calls, and exact configured
+names pass. Unverifiable external constructors can be approved by exact qualified name; uppercase
+helper functions do not pass merely because of capitalization. Dynamic dispatch is not inferred.

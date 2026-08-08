@@ -1,0 +1,40 @@
+export const ruleId = 'core.behavior-no-ambient-runtime-access'
+export const summary = 'Prevent use cases and services from obtaining ambient runtime behavior directly.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="core_behavior_no_ambient_runtime_access"></span>
+
+## `core.behavior-no-ambient-runtime-access`
+
+Prevent use cases and services from obtaining ambient runtime behavior directly.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Time, randomness, IDs, environment, IO, processes, and networks make core behavior nondeterministic unless modeled as dependencies.
+
+### Failing example
+
+```python
+class TokenService(BaseEffectService):
+    def create(self) -> str:
+        return uuid.uuid4().hex
+```
+
+### Passing example
+
+```python
+class TokenService(BaseEffectService):
+    generator: Injected[TokenGeneratorCapability]
+    def create(self) -> str:
+        return self.generator.create()
+```
+
+### Detection notes
+
+Recognizes documented standard-library and client effect APIs through lexical aliases, including
+environment, process, network, and filesystem calls plus typed or derived `pathlib.Path` values.
+Project-specific wrappers and fully dynamic dispatch still require review.

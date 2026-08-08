@@ -1,4 +1,0 @@
-interface:
-  display_name: "specx Tests"
-  short_description: "Add tests and boundary guards"
-  default_prompt: "Use $specx-tests to add unit, integration, e2e, and architecture tests."

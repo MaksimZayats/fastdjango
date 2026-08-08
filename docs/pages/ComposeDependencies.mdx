@@ -15,8 +15,6 @@ composition change.
 ## 1. Describe the edge bindings
 
 ```text
-Use $specx-diwire-composition and $specx-tests.
-
 Bind SQLAlchemyOrderUnitOfWorkManager to OrderUnitOfWorkManager and OpenAITaskSummaryGateway
 to TaskSummaryGateway. Register the shared HTTP client and SQLAlchemy engine once, preserve
 recursive registration for project classes, and update the lifecycle to close app-owned resources
@@ -73,11 +71,11 @@ use_case = container.resolve(CreateOrderUseCase)
 ```
 
 Use the native fixture. Do not enable DIWire's pytest plugin, inject test parameters with
-`Injected[...]`, or construct a second graph in the test body.
+`Injected[...]`, call `resolver_context.inject`, or construct a second graph in the test body.
 
 ```sh
 uv run pytest tests/integration/ioc
-uv run specx check
+uv run specx check --output-format json
 make check
 ```
 

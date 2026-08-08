@@ -1,0 +1,36 @@
+export const ruleId = 'fastapi.agents-md-documents-entrypoint'
+export const summary = 'Require FastAPI projects to document the project-specific application entrypoint.'
+export const family = 'fastapi'
+export const defaultEnabled = false
+export const requiredProjectSurface = 'delivery/fastapi'
+
+<span id="fastapi_agents_md_documents_entrypoint"></span>
+
+## `fastapi.agents-md-documents-entrypoint`
+
+Require FastAPI projects to document the project-specific application entrypoint.
+
+**Status:** Opt-in `fastapi` rule.
+
+**Required project surface:** `delivery/fastapi`.
+
+### Why this exists
+
+Agents need the real startup target, while lifecycle policy remains owned by executable rules and public guides.
+
+### Failing example
+
+```python
+# AGENTS.md: Start the API somewhere under delivery.
+```
+
+### Passing example
+
+```python
+# AGENTS.md: `acme.delivery.fastapi.__main__:app`
+```
+
+### Detection notes
+
+Checks for the exact package-qualified `delivery.fastapi.__main__:app` entrypoint, its module, and a
+static `app` binding when FastAPI rules are selected.

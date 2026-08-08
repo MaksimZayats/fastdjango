@@ -1,0 +1,38 @@
+export const ruleId = 'sqlalchemy.models-require-alembic'
+export const summary = 'Require Alembic configuration, revisions, commands, and tests for concrete models.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="sqlalchemy_models_require_alembic"></span>
+
+## `sqlalchemy.models-require-alembic`
+
+Require Alembic configuration, revisions, commands, and tests for concrete models.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+A concrete relational model changes the database contract and must be represented by reviewable, testable migrations.
+
+### Failing example
+
+```python
+class OrderModel(BaseSQLAlchemyModel):
+    pass  # no Alembic revision or migration test
+```
+
+### Passing example
+
+```python
+class OrderModel(BaseSQLAlchemyModel):
+    pass  # Alembic config, revision, Make commands, and integration test exist
+```
+
+### Detection notes
+
+When a concrete model exists, checks meaningful Alembic configuration and environment markers, at
+least one upgrade/downgrade revision, `migrate`, `makemigrations`, and `migration-check` recipes that
+invoke Alembic, plus an integration test covering upgrade and metadata drift. Statically abstract or
+`Base...` declarative foundation classes do not activate the rule.

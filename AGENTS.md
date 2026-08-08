@@ -2,16 +2,14 @@
 
 ## Repository Purpose
 
-This repo is the specx skill catalog and Python guardrail package. It publishes
-reusable agent skills and a typed `specx` package for creating Python backend
+This repo is the specx Python guardrail package and optional navigation skill. It publishes
+a typed `specx` package for creating Python backend
 services with packaged scoped foundation bases, rule-based architecture tests,
 and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
 
 ## Repo Map
 
-- `skills/<skill-name>/SKILL.md` defines the skill trigger and workflow.
-- `skills/<skill-name>/references/*.md` contains detailed implementation
-  patterns and examples.
+- `skills/specx/SKILL.md` defines the one optional navigation workflow.
 - `skills/<skill-name>/agents/openai.yaml` contains OpenAI skill UI metadata.
 - `.agents/skills/` is the tracked local-discovery mirror of canonical
   `skills/`; update it with `make sync-skills` rather than editing it directly.
@@ -25,7 +23,7 @@ and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
 - `src/specx/_internal/project_management/` implements static discovery,
   deterministic scaffolding, runtime execution, and terminal presentation.
 - `tests/` validates the `specx` package and skill helper scripts.
-- `scripts/validate_skills.py` validates the skill catalog.
+- `scripts/validate_skills.py` validates the optional skill.
 
 ## Root Commands
 
@@ -49,7 +47,7 @@ and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
   `specx project --error-format json ...` when failures must also be parsed.
 - Run `uv run specx project use-case show COMPONENT/NAME --output-format json` before constructing
   runner input; unknown keys are rejected.
-- Install from GitHub: `npx skills add maksimzayats/specx --skill '*' --agent codex -y`
+- Install from GitHub: `npx skills add maksimzayats/specx --skill specx --agent codex -y`
 
 ## Skill Authoring Rules
 
@@ -59,15 +57,15 @@ and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
 - `name` must match the directory name.
 - `description` must be trigger-oriented, non-empty, and avoid angle brackets.
 - Do not leave `TODO` placeholders.
-- Keep `SKILL.md` concise; put detailed patterns in `references/*.md`.
+- Keep `SKILL.md` concise; detailed patterns belong in public documentation.
 - Keep `SKILL.md` at or below 500 lines and add a linked `## Contents` section
   to Markdown references over 100 lines.
 - Edit canonical `skills/`, run `make sync-skills`, and let validation reject
   drift in the tracked `.agents/skills/` mirror.
 - If `agents/openai.yaml` exists, `default_prompt` must mention
   `$<skill-name>` and `short_description` must be 25-64 characters.
-- When changing generated-project commands or architecture, update the relevant
-  skill references and the generated-project `AGENTS.md` guidance together.
+- When changing generated-project commands, update the generated-project
+  `AGENTS.md` guidance and public documentation together.
 
 ## specx Service Rules To Preserve
 
@@ -137,5 +135,5 @@ and clean `core` / `delivery` / `infrastructure` / `ioc` boundaries.
 
 - For catalog changes, run root `make check`.
 - Do not add empty future-facing folders or placeholder skills.
-- Do not duplicate full reference docs in this file; keep stable repo rules here
-  and detailed generation rules inside `skills/*/references/`.
+- Do not duplicate full reference docs in this file or the optional skill; keep
+  stable repo rules here and detailed guidance in public documentation.

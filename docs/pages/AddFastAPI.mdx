@@ -9,18 +9,16 @@ import { NextPrev } from "@storybookComponents/NextPrev"
 ## Prerequisites
 
 Start with a tested core use case. Decide the public path, success status, request/response fields,
-known application errors, and any long-lived resources the app must close. Install the specx skills.
+known application errors, and any long-lived resources the app must close.
 
 ## 1. Describe the HTTP contract
 
 ```text
-Use $specx-add-delivery-controller, $specx-diwire-composition,
-$specx-project-tooling, and $specx-tests.
-
 Expose CreateOrderUseCase as POST /api/v1/orders. Add strict request and response schemas,
 an OrdersController, FastAPIFactory, FastAPILifecycle, the runtime entrypoint, dependencies,
 Makefile dev command, and HTTP integration tests. Return 201 on success and translate
-OrderAlreadyExistsError to a non-sensitive 409 response. Run ASGI lifespan in tests.
+OrderAlreadyExistsError to a non-sensitive 409 response. Run ASGI lifespan in tests and follow
+`specx check --output-format json` diagnostics.
 ```
 
 Name every error contract explicitly. The controller should never return a raw exception message or

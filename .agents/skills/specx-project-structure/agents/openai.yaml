@@ -1,4 +1,0 @@
-interface:
-  display_name: "specx Project Structure"
-  short_description: "Create clean FastAPI service layout"
-  default_prompt: "Use $specx-project-structure to create a new clean FastAPI service layout."

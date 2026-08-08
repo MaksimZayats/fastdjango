@@ -22,6 +22,10 @@ class SpecxRuleId(StrEnum):
     RESULT_DTO_CLASSES_LIVE_UNDER_SCOPE_DTOS_PACKAGE = "dtos.result-dtos-live-under-dtos"
     USE_CASE_INPUTS_ARE_LOCAL_COMMANDS_OR_QUERIES = "use-cases.inputs-are-local-commands-or-queries"
     USE_CASE_MODULES_DEFINE_ONE_USE_CASE = "use-cases.one-per-module"
+    USE_CASES_ORCHESTRATE_THROUGH_COLLABORATORS = "use-cases.orchestrate-through-collaborators"
+    CORE_BEHAVIOR_NO_AMBIENT_RUNTIME_ACCESS = "core.behavior-no-ambient-runtime-access"
+    CORE_CONTRACTS_USE_IMMUTABLE_DATACLASSES = "core.contracts-use-immutable-dataclasses"
+    CORE_NO_RUNTIME_CONFIGURATION_OR_PYDANTIC = "core.no-runtime-configuration-or-pydantic"
     COMMAND_AND_QUERY_CLASSES_LIVE_WITH_USE_CASES = "use-cases.commands-and-queries-live-local"
     CAPABILITIES_LIVE_IN_EXPECTED_PACKAGES_AND_USE_EXPECTED_SUFFIXES = (
         "capabilities.placement-and-suffix"
@@ -41,6 +45,7 @@ class SpecxRuleId(StrEnum):
     SERVICE_CLASSES_USE_SERVICE_SUFFIX = "services.require-service-suffix"
     CORE_SERVICES_USE_EFFECT_SPECIFIC_SERVICE_BASES = "services.require-effect-specific-bases"
     GENERIC_BASE_SERVICE_IS_NOT_USED = "services.no-generic-base-service"
+    SERVICE_METHODS_USE_KEYWORD_ONLY_ARGUMENTS = "services.methods-use-keyword-only-arguments"
     PURE_SERVICES_DO_NOT_DEPEND_ON_IO_OR_RUNTIME_STATE = "services.pure-no-io-or-runtime-state"
     READ_SERVICES_DO_NOT_PERFORM_WRITES_OR_OWN_TRANSACTIONS = (
         "services.read-no-writes-or-transactions"
@@ -53,14 +58,17 @@ class SpecxRuleId(StrEnum):
     )
     NON_FOUNDATION_CLASSES_DO_NOT_USE_RAW_COMMON_BASES = "classes.no-raw-common-bases"
     ONLY_IOC_DELIVERY_APP_AND_TESTS_IMPORT_CONTAINER = "diwire.container-import-boundary"
+    DIWIRE_NO_FUNCTION_INJECTION = "diwire.no-function-injection"
     LOGGING_DOES_NOT_INJECT_LOGGERS = "logging.no-injected-loggers"
     PUBLIC_ROUTES_USE_FULL_API_V1_PATHS = "delivery.routes-use-full-api-v1-paths"
     NO_SCHEMA_BOOTSTRAP_CALLS_IN_SOURCE_OR_TESTS = "sqlalchemy.no-schema-bootstrap-calls"
-    ROOT_AGENTS_MD_DOCUMENTS_PROJECT_COMMANDS_AND_BOUNDARIES = (
-        "agents-md.documents-commands-and-boundaries"
+    ROOT_AGENTS_MD_DOCUMENTS_PROJECT_COMMANDS = "agents-md.documents-project-commands"
+    FASTAPI_ROOT_AGENTS_MD_DOCUMENTS_ENTRYPOINT = "fastapi.agents-md-documents-entrypoint"
+    DELIVERY_FOUNDATION_CLASSES_LIVE_UNDER_DELIVERY = (
+        "delivery.foundation-classes-live-under-delivery"
     )
-    FASTAPI_ROOT_AGENTS_MD_DOCUMENTS_DELIVERY = "fastapi.agents-md-documents-delivery"
     TESTS_MIRROR_SOURCE_STRUCTURE = "tests.mirror-source-structure"
+    TESTS_CORE_BEHAVIOR_RESOLVES_FROM_CONTAINER = "tests.core-behavior-resolves-from-container"
     TEST_FIXTURES_DO_NOT_BUNDLE_MOCKS = "tests.fixtures-do-not-bundle-mocks"
     INTEGRATION_TESTS_DO_NOT_MOCK_INTERNAL_COLLABORATORS = (
         "tests.integration-does-not-mock-internal-collaborators"
@@ -72,4 +80,8 @@ class SpecxRuleId(StrEnum):
         "uow.use-cases-no-direct-repositories-or-infrastructure"
     )
     IOC_CONTAINER_DOES_NOT_REGISTER_ACTIVE_UNIT_OF_WORK = "uow.ioc-does-not-register-active-uow"
+    SQLALCHEMY_MODELS_LIVE_UNDER_SCOPE_INFRASTRUCTURE = (
+        "sqlalchemy.models-live-under-scope-infrastructure"
+    )
+    SQLALCHEMY_MODELS_REQUIRE_ALEMBIC = "sqlalchemy.models-require-alembic"
     INIT_FILES_ARE_EMPTY = "packages.init-files-are-empty"

@@ -1,0 +1,37 @@
+export const ruleId = 'tests.core-behavior-resolves-from-container'
+export const summary = 'Require mirrored core-behavior tests to resolve every concrete target from DIWire.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="tests_core_behavior_resolves_from_container"></span>
+
+## `tests.core-behavior-resolves-from-container`
+
+Require mirrored core-behavior tests to resolve every concrete target from DIWire.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Resolving each concrete behavior proves its constructor graph is registered without prescribing test counts or assertions.
+
+### Failing example
+
+```python
+def test_total() -> None:
+    service = PriceService()
+```
+
+### Passing example
+
+```python
+def test_total(container: Container) -> None:
+    service = container.resolve(PriceService)
+```
+
+### Detection notes
+
+Checks each required mirrored unit module for a `test_` function with a `container` fixture and an
+explicit resolve call for every exact path-qualified concrete target. Statically abstract and
+`Base...` behavior classes are not resolution targets.

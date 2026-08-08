@@ -1,4 +1,0 @@
-interface:
-  display_name: "specx Add Infrastructure Adapter"
-  short_description: "Add external IO adapter classes"
-  default_prompt: "Use $specx-add-infrastructure-adapter to add a database, Redis, or network adapter."

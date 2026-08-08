@@ -966,6 +966,11 @@ def _run_rule_explain(rule_id: str) -> int:
     print(f"Enabled by default: {'yes' if metadata.default_enabled else 'no'}")
     if metadata.required_project_surface is not None:
         print(f"Required project surface: {metadata.required_project_surface}")
+    if metadata.remediation is not None:
+        print(f"Remediation: {metadata.remediation}")
+    if metadata.documentation_url is not None:
+        print(f"Documentation: {metadata.documentation_url}")
+    print(f"Detection boundary: {metadata.detection_boundary}")
     print()
     print(getdoc(rule_type) or metadata.summary)
     return 0
@@ -1014,7 +1019,12 @@ def _format_text_diagnostic(
         if diagnostic.column is not None:
             location = f"{location}:{diagnostic.column}"
     prefix = f"{location}: " if location else ""
-    return f"{prefix}{severity} {diagnostic.rule_id} {diagnostic.message}"
+    lines = [f"{prefix}{severity} {diagnostic.rule_id} {diagnostic.message}"]
+    if diagnostic.hint is not None:
+        lines.append(f"  help: {diagnostic.hint}")
+    if diagnostic.documentation_url is not None:
+        lines.append(f"  docs: {diagnostic.documentation_url}")
+    return "\n".join(lines)
 
 
 def _format_json(report: SpecxArchitectureReport) -> str:
@@ -1035,7 +1045,7 @@ def _format_json(report: SpecxArchitectureReport) -> str:
         for violation in report.violations
     )
     payload = {
-        "version": 1,
+        "version": 2,
         "root": str(report.project_root),
         "diagnostics": diagnostics,
         "summary": {

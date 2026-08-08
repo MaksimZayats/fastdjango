@@ -131,7 +131,7 @@ READ_REPOSITORY_METHOD_PREFIXES = (
     "search_by_",
 )
 SCHEMA_BOOTSTRAP_METHOD_NAMES = {"create_all", "drop_all"}
-MAKE_COMMAND_PATTERN = re.compile(r"`make\s+([a-zA-Z0-9_.-]+)(?:\s|`)")
+MAKE_COMMAND_PATTERN = re.compile(r"(?<![a-zA-Z0-9_-])make\s+([a-zA-Z0-9_.-]+)\b")
 MAKE_TARGET_PATTERN = re.compile(r"^([a-zA-Z0-9_.-]+):(?:\s|$)", re.MULTILINE)
 
 
@@ -193,6 +193,38 @@ class ArchitectureContext:
             for match in MAKE_TARGET_PATTERN.finditer(text)
             if not match.group(1).startswith(".")
         }
+
+    def makefile_target_recipes(self) -> dict[str, str]:
+        """Return each public Make target and its recipe/body text."""
+
+        path = self.project_root / "Makefile"
+        if not path.exists():
+            return {}
+        recipes: dict[str, list[str]] = {}
+        current_targets: tuple[str, ...] = ()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = MAKE_TARGET_PATTERN.match(line)
+            if match is not None:
+                current_targets = tuple(
+                    target
+                    for target in line.split(":", maxsplit=1)[0].split()
+                    if not target.startswith(".")
+                )
+                for target in current_targets:
+                    recipes.setdefault(target, [])
+                continue
+            for target in current_targets:
+                recipes[target].append(line)
+        return {target: "\n".join(lines).strip() for target, lines in recipes.items()}
+
+    def qualified_name(self, path: Path, expression: ast.expr | None) -> str:
+        """Resolve an imported alias or lexically local symbol to a qualified name."""
+
+        chain = attribute_chain(expression)
+        if not chain:
+            return ast.unparse(expression) if expression is not None else ""
+        bindings = qualified_symbol_bindings(self, path, at_node=expression)
+        return ".".join((bindings.get(chain[0], chain[0]), *chain[1:]))
 
 
 def documented_make_targets(text: str) -> set[str]:
@@ -582,6 +614,76 @@ def class_definition_base_index(
     return {name: tuple(definitions) for name, definitions in mutable_index.items()}
 
 
+def class_has_foundation_base_at(
+    node: ast.ClassDef,
+    base: str,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+    definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
+) -> bool:
+    """Return whether one path-qualified class inherits a foundation base."""
+
+    return class_has_foundation_base_from_path(
+        node.name,
+        base,
+        source_path=source_path,
+        context=context,
+        definition_index=definition_index,
+    )
+
+
+def qualified_class_name(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> str:
+    """Return the importable qualified name of a project class."""
+
+    return f"{_source_module_name(source_path, context)}.{node.name}"
+
+
+def project_class_qualified_names(context: ArchitectureContext) -> frozenset[str]:
+    """Return every statically declared project class by qualified name."""
+
+    return frozenset(
+        qualified_class_name(node, source_path=path, context=context)
+        for path in context.source_paths()
+        for node in context.tree(path).body
+        if isinstance(node, ast.ClassDef)
+    )
+
+
+def class_is_statically_abstract(node: ast.ClassDef, aliases: dict[str, str]) -> bool:
+    """Recognize project base classes that cannot be resolved as concrete targets."""
+
+    if node.name.startswith("Base"):
+        return True
+    if any(
+        base_name(base, aliases).rsplit(".", maxsplit=1)[-1] in {"ABC", "Protocol"}
+        for base in node.bases
+    ):
+        return True
+    for child in node.body:
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            annotation_name(decorator, aliases).rsplit(".", maxsplit=1)[-1] == "abstractmethod"
+            for decorator in child.decorator_list
+        ):
+            return True
+        if (
+            isinstance(child, (ast.Assign, ast.AnnAssign))
+            and any(
+                isinstance(target, ast.Name) and target.id == "__abstract__"
+                for target in (child.targets if isinstance(child, ast.Assign) else [child.target])
+            )
+            and isinstance(child.value, ast.Constant)
+            and child.value.value is True
+        ):
+            return True
+    return False
+
+
 def class_has_foundation_base_from_path(
     class_name: str,
     base: str,
@@ -645,6 +747,96 @@ def _class_definition_candidates(
 def _source_module_name(path: Path, context: ArchitectureContext) -> str:
     relative_module = path.relative_to(context.src_root).with_suffix("")
     return ".".join((context.config.package_name, *relative_module.parts))
+
+
+def qualified_symbol_bindings(
+    context: ArchitectureContext,
+    path: Path,
+    *,
+    at_node: ast.AST | None = None,
+) -> dict[str, str]:
+    """Return import and lexically local symbol bindings at one AST node."""
+
+    module_name = (
+        _source_module_name(path, context) if path.is_relative_to(context.src_root) else ""
+    )
+    bindings: dict[str, str] = {}
+    for node in context.tree(path).body:
+        _update_import_bindings(node, bindings, module_name=module_name)
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            bindings[node.name] = f"{module_name}.{node.name}" if module_name else node.name
+    if at_node is not None:
+        for scope in _containing_function_scopes(context.tree(path), at_node):
+            _update_function_scope_bindings(scope, bindings, module_name=module_name)
+    return bindings
+
+
+def _containing_function_scopes(
+    tree: ast.Module,
+    target: ast.AST,
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    scopes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+
+    def visit(node: ast.AST) -> bool:
+        if node is target:
+            return True
+        for child in ast.iter_child_nodes(node):
+            if visit(child):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    scopes.append(node)
+                return True
+        return False
+
+    visit(tree)
+    scopes.reverse()
+    return tuple(scopes)
+
+
+def _update_function_scope_bindings(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: dict[str, str],
+    *,
+    module_name: str,
+) -> None:
+    arguments = (
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    )
+    for argument in arguments:
+        bindings[argument.arg] = f"<local>.{argument.arg}"
+    if function.args.vararg is not None:
+        bindings[function.args.vararg.arg] = f"<local>.{function.args.vararg.arg}"
+    if function.args.kwarg is not None:
+        bindings[function.args.kwarg.arg] = f"<local>.{function.args.kwarg.arg}"
+
+    for node in _function_scope_nodes(function):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            _update_import_bindings(node, bindings, module_name=module_name)
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bindings[node.id] = f"<local>.{node.id}"
+
+
+def _function_scope_nodes(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.AST, ...]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not function and isinstance(
+            node,
+            (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                nodes.append(node)
+            return
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(function)
+    return tuple(nodes)
 
 
 def _index_class_definitions(

@@ -3,23 +3,19 @@ import { NextPrev } from "@storybookComponents/NextPrev"
 
 <Meta title="Guides/Install agent skills" />
 
-<Title>Install agent skills</Title>
-<Subtitle>Add the specx workflows to Codex and verify what was installed.</Subtitle>
+<Title>Install the optional `specx` skill</Title>
+<Subtitle>Add project-navigation help without making skill installation a prerequisite.</Subtitle>
 
-## Install from GitHub
-
-Run the installer from the project where the agent will work:
+Install the one skill for Codex when you want its navigation workflow:
 
 ```sh
-npx skills add maksimzayats/specx --skill '*' --agent codex -y
+npx skills add maksimzayats/specx --skill specx --agent codex -y
 ```
 
-The command installs the catalog for the `codex` target. It does not add the `specx` Python package
-to your application and does not change application code.
+This does not install the Python package or mutate application code. Projects and CI should install
+the `specx` package and run executable checks regardless of whether any agent skill is installed.
 
-## Inspect a checkout before installing
-
-Clone the repository when you want to review the skill text or test a branch:
+Inspect a checkout before installing:
 
 ```sh
 git clone https://github.com/maksimzayats/specx.git
@@ -27,32 +23,14 @@ cd specx
 npx skills add . --list --full-depth
 ```
 
-Canonical skill definitions live under `skills/`. The tracked `.agents/skills/` directory is a local
-discovery mirror maintained by this repository; do not copy both trees into an application.
-
-## Install one workflow
-
-Replace `'*'` with a skill name when the agent only needs a narrow workflow:
-
-```sh
-npx skills add maksimzayats/specx --skill specx-add-core-use-case --agent codex -y
-```
-
-## Use a skill
-
-Name a skill in the request when you want its workflow applied explicitly:
+Invoke it explicitly when useful:
 
 ```text
-Use $specx-add-infrastructure-adapter to add the PostgreSQL order repository and unit of work.
-Do not add the HTTP delivery layer yet.
+Use $specx to inspect this project, implement the order-status action, follow structured
+architecture diagnostics, and run the full project check.
 ```
 
-You can also describe the work without naming a skill. Each skill has a trigger-oriented description
-that lets the agent choose it from the task.
-
-## Update the catalog
-
-Run the install command again to update. Review skill diffs because they can change future agent
-decisions and code structure.
+Run the install command again to update. Review skill changes because they affect future agent
+navigation, even though executable checks remain authoritative.
 
 <NextPrev current="guides-install-agent-skills" />

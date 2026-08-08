@@ -9,9 +9,10 @@ from typing import cast
 from specx.testing.architecture.models import SpecxArchitectureConfig, SpecxConfigurationError
 
 _ALLOWED_CONFIG_KEYS = frozenset(
-    {"exclude", "extend-select", "ignore", "package", "project", "select"}
+    {"call-policy", "exclude", "extend-select", "ignore", "package", "project", "select"}
 )
 _ALLOWED_PROJECT_CONFIG_KEYS = frozenset({"container-factory"})
+_ALLOWED_CALL_POLICY_KEYS = frozenset({"extend-allowed-functions"})
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -57,6 +58,7 @@ def load_specx_config(project_root: Path) -> LoadedSpecxConfig:
     ignored_rules = frozenset(_read_string_list(raw_config, "ignore"))
     path_exclusions = tuple(_read_string_list(raw_config, "exclude"))
     project_config = _read_project_config(raw_config)
+    allowed_use_case_functions = _read_call_policy(raw_config)
 
     return LoadedSpecxConfig(
         architecture=SpecxArchitectureConfig(
@@ -66,9 +68,29 @@ def load_specx_config(project_root: Path) -> LoadedSpecxConfig:
             extend_select=extend_select,
             disabled_rules=ignored_rules,
             path_exclusions=path_exclusions,
+            allowed_use_case_functions=allowed_use_case_functions,
         ),
         project=project_config,
         pyproject_path=pyproject_path,
+    )
+
+
+def _read_call_policy(config: dict[str, object]) -> frozenset[str]:
+    raw_value = config.get("call-policy", {})
+    if not isinstance(raw_value, dict):
+        raise SpecxConfigurationError("tool.specx.call-policy must be a TOML table")
+    raw_policy = cast(dict[str, object], raw_value)
+    unknown_keys = set(raw_policy) - _ALLOWED_CALL_POLICY_KEYS
+    if unknown_keys:
+        raise SpecxConfigurationError(
+            f"unknown [tool.specx.call-policy] keys: {sorted(unknown_keys)}"
+        )
+    return frozenset(
+        _read_string_list(
+            raw_policy,
+            "extend-allowed-functions",
+            table_path="tool.specx.call-policy",
+        )
     )
 
 
@@ -81,7 +103,11 @@ def _read_project_config(config: dict[str, object]) -> LoadedProjectConfig:
     if unknown_keys:
         raise SpecxConfigurationError(f"unknown [tool.specx.project] keys: {sorted(unknown_keys)}")
     return LoadedProjectConfig(
-        container_factory=_read_optional_string(raw_project, "container-factory")
+        container_factory=_read_optional_string(
+            raw_project,
+            "container-factory",
+            table_path="tool.specx.project",
+        )
     )
 
 
@@ -97,22 +123,32 @@ def _read_tool_specx(document: dict[str, object]) -> dict[str, object]:
     return cast(dict[str, object], raw_config_value)
 
 
-def _read_optional_string(config: dict[str, object], key: str) -> str | None:
+def _read_optional_string(
+    config: dict[str, object],
+    key: str,
+    *,
+    table_path: str = "tool.specx",
+) -> str | None:
     value = config.get(key)
     if value is None:
         return None
     if not isinstance(value, str) or not value:
-        raise SpecxConfigurationError(f"tool.specx.{key} must be a non-empty string")
+        raise SpecxConfigurationError(f"{table_path}.{key} must be a non-empty string")
     return value
 
 
-def _read_string_list(config: dict[str, object], key: str) -> tuple[str, ...]:
+def _read_string_list(
+    config: dict[str, object],
+    key: str,
+    *,
+    table_path: str = "tool.specx",
+) -> tuple[str, ...]:
     value = config.get(key, [])
     if not isinstance(value, list):
-        raise SpecxConfigurationError(f"tool.specx.{key} must be an array of non-empty strings")
+        raise SpecxConfigurationError(f"{table_path}.{key} must be an array of non-empty strings")
     items = cast(list[object], value)
     if any(not isinstance(item, str) or not item for item in items):
-        raise SpecxConfigurationError(f"tool.specx.{key} must be an array of non-empty strings")
+        raise SpecxConfigurationError(f"{table_path}.{key} must be an array of non-empty strings")
     return tuple(cast(str, item) for item in items)
 
 

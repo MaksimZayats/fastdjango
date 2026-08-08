@@ -1,0 +1,35 @@
+export const ruleId = 'agents-md.documents-project-commands'
+export const summary = 'Keep generated agent guidance aligned with real project paths and runnable commands.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="agents_md_documents_project_commands"></span>
+
+## `agents-md.documents-project-commands`
+
+Keep generated agent guidance aligned with real project paths and runnable commands.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Project guidance should help an agent enter the actual project without becoming a second architecture policy source.
+
+### Failing example
+
+```python
+# AGENTS.md: run `make deploy`, but Makefile has no deploy target.
+```
+
+### Passing example
+
+```python
+# AGENTS.md: package is under src/acme; run make check and
+# `specx check --output-format json` for structured diagnostics.
+```
+
+### Detection notes
+
+Checks the real source package path, requires `check`, `lint`, and `test` to exist in the Makefile,
+and validates every documented Make command against actual targets.

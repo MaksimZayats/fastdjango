@@ -1,0 +1,37 @@
+export const ruleId = 'services.methods-use-keyword-only-arguments'
+export const summary = 'Require public service methods to expose explicit keyword-only arguments after self.'
+export const family = 'neutral'
+export const defaultEnabled = true
+export const requiredProjectSurface = null
+
+<span id="services_methods_use_keyword_only_arguments"></span>
+
+## `services.methods-use-keyword-only-arguments`
+
+Require public service methods to expose explicit keyword-only arguments after self.
+
+**Status:** Enabled by default.
+
+### Why this exists
+
+Keyword-only service APIs make orchestration readable and prevent argument-order mistakes as contracts evolve.
+
+### Failing example
+
+```python
+class PriceService(BasePureService):
+    def total(self, price: int, quantity: int) -> int:
+        return price * quantity
+```
+
+### Passing example
+
+```python
+class PriceService(BasePureService):
+    def total(self, *, price: int, quantity: int) -> int:
+        return price * quantity
+```
+
+### Detection notes
+
+Checks public methods on direct and inherited pure, read, and effect service subclasses.

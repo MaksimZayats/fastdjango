@@ -7,7 +7,7 @@
 <h1 align="center">specx</h1>
 
 <p align="center">
-  Agent skills and executable architecture guardrails for Python services.
+  Executable architecture guardrails for agent-built Python services.
 </p>
 
 <p align="center">
@@ -25,14 +25,14 @@
 </p>
 
 `specx` gives coding agents a shared architecture for Python backends and checks
-that the implementation still follows it. It combines composable agent skills,
-typed foundation classes, a project initializer, and rule-based architecture
-checks with stable, documented rule IDs.
+that the implementation still follows it. Typed foundation classes, generated
+project guidance, project commands, and rule-based checks work without any
+installed skill.
 
 ## Highlights
 
-- **Agent-ready workflows.** Installable skills cover project structure, core
-  behavior, FastAPI delivery, DI, persistence, settings, migrations, and tests.
+- **Enforcement-first.** Structured diagnostics include remediation and links
+  to authoritative rule documentation; one optional skill helps navigation.
 - **Architecture as code.** `specx check` catches layer leaks, incorrect
   inheritance, hidden transaction ownership, misplaced types, and test drift.
 - **Project management CLI.** Inspect core components, scaffold typed use cases,
@@ -54,11 +54,11 @@ uv tool install specx
 
 Upgrade it later with `uv tool upgrade specx`.
 
-The agent skills are installed separately and require Node.js. This example
-installs the full catalog for Codex:
+The optional navigation skill is installed separately and requires Node.js.
+Projects do not need it for specx enforcement:
 
 ```sh
-npx skills add maksimzayats/specx --skill '*' --agent codex -y
+npx skills add maksimzayats/specx --skill specx --agent codex -y
 ```
 
 See [Install agent skills](https://specx.dev/docs/guides/install-agent-skills/)
@@ -114,7 +114,7 @@ for selectors, exclusions, JSON output, and incremental rollout.
 - [How specx works](https://specx.dev/docs/overview/how-specx-works/)
 - [Architecture rules](https://specx.dev/docs/reference/architecture-rules/)
 - [Foundation API](https://specx.dev/docs/reference/foundation-api/)
-- [Skills catalog](https://specx.dev/docs/reference/skills-catalog/)
+- [Optional skill](https://specx.dev/docs/reference/skills-catalog/)
 - [CLI reference](https://specx.dev/docs/reference/cli/)
 
 ## Contributing

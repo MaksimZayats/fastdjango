@@ -1,4 +1,0 @@
-interface:
-  display_name: "specx Add Core Service"
-  short_description: "Add focused core services"
-  default_prompt: "Use $specx-add-core-service to add focused reusable core behavior."

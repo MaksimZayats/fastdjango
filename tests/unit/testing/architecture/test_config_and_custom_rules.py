@@ -98,7 +98,7 @@ def test_fastapi_rules_are_opt_in_and_warn_when_surface_is_missing(tmp_path: Pat
         for rule_id in SpecxRuleId
         if rule_id
         not in {
-            SpecxRuleId.FASTAPI_ROOT_AGENTS_MD_DOCUMENTS_DELIVERY,
+            SpecxRuleId.FASTAPI_ROOT_AGENTS_MD_DOCUMENTS_ENTRYPOINT,
             SpecxRuleId.PUBLIC_ROUTES_USE_FULL_API_V1_PATHS,
         }
     )

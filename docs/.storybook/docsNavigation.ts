@@ -58,6 +58,7 @@ export const docsNavigation = [
         path: "concepts-transactions-and-units-of-work",
       },
       { title: "Testing strategy", path: "concepts-testing-strategy" },
+      { title: "Policy ownership", path: "concepts-policy-ownership" },
     ],
   },
   {

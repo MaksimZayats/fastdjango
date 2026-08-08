@@ -34,6 +34,7 @@ const preview: Preview = {
             "Ports and adapters",
             "Transactions and units of work",
             "Testing strategy",
+            "Policy ownership",
           ],
           "Reference",
           [

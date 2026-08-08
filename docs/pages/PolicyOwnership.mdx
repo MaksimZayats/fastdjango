@@ -1,0 +1,24 @@
+import { Meta, Subtitle, Title } from "@storybook/blocks"
+import { NextPrev } from "@storybookComponents/NextPrev"
+
+<Meta title="Concepts/Policy ownership" />
+
+<Title>Policy ownership</Title>
+<Subtitle>Put each constraint in the executable or explanatory surface that can enforce it best.</Subtitle>
+
+| Owner | Put this here | Examples |
+| --- | --- | --- |
+| specx rule | Cross-file architecture that static source and layout analysis can detect | dependency direction, foundation ancestry, use-case orchestration, ambient runtime access, model placement |
+| Ruff or type checker | Local syntax, style, unsafe constructs, and type compatibility | unused imports, keyword calls, annotations, unreachable code, formatting |
+| Tests | Runtime behavior and integration contracts | returned values, failures, database migrations, HTTP responses, resource shutdown |
+| CLI scaffold | Deterministic boilerplate with a single valid shape | project initialization and typed use-case modules |
+| Judgment and documentation | Context-dependent choices static checks cannot prove | scope ownership, naming quality, business transaction semantics, provider selection |
+
+Prefer one authoritative owner. A generated `AGENTS.md` documents real project shape, entrypoints,
+and commands; it does not repeat the architecture rulebook. Rule pages own rationale, examples, and
+static-analysis limits. Diagnostic hints point back to those pages.
+
+When a project needs an exception, use an exact rule ignore, a narrow path exclusion, or an exact
+call-policy name. specx intentionally has no inline suppression comments.
+
+<NextPrev current="concepts-policy-ownership" />

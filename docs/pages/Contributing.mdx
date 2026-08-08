@@ -12,7 +12,7 @@ The repository's
 [CONTRIBUTING.md](https://github.com/maksimzayats/specx/blob/main/CONTRIBUTING.md) is the canonical
 contributor guide; this page is its docs-site companion. Read the root `AGENTS.md` before editing.
 specx publishes two connected products from one repository:
-the typed Python guardrail package under `src/specx/` and the canonical agent catalog under `skills/`.
+the typed Python guardrail package under `src/specx/` and one optional navigation skill under `skills/specx/`.
 Tests and helper scripts live under `tests/` and `scripts/`.
 
 You need uv with a supported Python version and Node.js 20 or newer. Install the locked development
@@ -27,8 +27,8 @@ npm --prefix docs run docs:check
 
 ## Change a skill
 
-Edit only the canonical `skills/<skill-name>/` directory. Keep `SKILL.md` concise and
-trigger-oriented; put reusable patterns and longer examples in `references/`. A skill frontmatter
+Edit only the canonical `skills/specx/` directory. Keep `SKILL.md` concise and
+navigation-oriented; put reusable patterns and longer examples in public documentation. Skill frontmatter
 contains only `name` and `description`, and its name matches the directory.
 
 After editing, synchronize the tracked local-discovery mirror and validate it:
@@ -39,16 +39,15 @@ make validate-skills
 make list-skills
 ```
 
-Do not edit `.agents/skills/` by hand. If a reference exceeds 100 lines, give it a short linked
-contents section. UI metadata in `agents/openai.yaml` must keep its prompt and description aligned
-with the canonical skill.
+Do not edit `.agents/skills/` by hand. UI metadata in `agents/openai.yaml` must keep its prompt and
+description aligned with the canonical skill.
 
 ## Change an architecture rule
 
 Preserve the existing semantic rule ID for a compatible refinement. If the rule's contract changes,
-introduce a new ID or document the migration. Update the implementation and focused tests, then
-update every skill reference that teaches the same behavior. If the rule changes generated-project
-expectations, update the root agent guidance and compatibility renderer as well.
+introduce a new ID or document the migration. Update the implementation, authored remediation,
+detection boundary, focused tests, and authoritative page under `docs/rules/`. If the rule changes
+generated-project commands or entrypoints, update the generated agent guidance as well.
 
 ```sh
 uv run specx rule explain use-cases.return-dtos
@@ -56,7 +55,7 @@ make test
 make check
 ```
 
-Changes to the initializer, templates, compatibility renderer, or generated commands must be tested
+Changes to the initializer, templates, or generated commands must be tested
 by initializing a disposable project. Documentation-only changes are exempt.
 
 ## Change these docs
@@ -79,9 +78,9 @@ request.
 
 ## Pull request checklist
 
-- Package behavior, skill instructions, and architecture references agree.
+- Package behavior, public rule pages, and the optional navigation skill agree.
 - `make check` and the documentation checks pass.
-- Initializer, template, renderer, and generated-command changes were exercised in a disposable project.
+- Initializer, template, and generated-command changes were exercised in a disposable project.
 - No placeholder directories, copied foundation bases, caches, or local environment files are added.
 - User-facing prose describes observable behavior and real commands without promotional filler.
 

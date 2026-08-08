@@ -61,6 +61,10 @@ def test_every_builtin_rule_has_one_complete_reference() -> None:
             metadata.required_project_surface
         )
         assert source.count(f'<span id="{expected_stem}"></span>') == 1
+        assert metadata.remediation
+        assert metadata.documentation_url == (
+            f"https://specx.dev/docs/reference/architecture-rules/#{expected_stem}"
+        )
         assert source.count(f"## `{rule_id}`") == 1
         assert f"\n\n{metadata.summary}\n\n**Status:** {expected_status}." in source
         if metadata.required_project_surface is None:

@@ -35,6 +35,8 @@ flat diagnostic per line followed by a summary. Paths inside the project are rel
 
 ```text
 src/order_service/core/orders/use_cases/get_order.py:24:1: error use-cases.return-dtos execute returns OrderEntity
+  help: Return a project DTO from the use case, then rerun `specx check`.
+  docs: https://specx.dev/docs/reference/architecture-rules/#use_cases_return_dtos
 Found 1 violation(s) and 0 warning(s).
 ```
 
@@ -47,6 +49,8 @@ JSON output is a versioned integration contract:
       "column": 1,
       "line": 24,
       "message": "execute returns OrderEntity",
+      "hint": "Return a project DTO from the use case, then rerun `specx check`.",
+      "documentation_url": "https://specx.dev/docs/reference/architecture-rules/#use_cases_return_dtos",
       "path": "src/order_service/core/orders/use_cases/get_order.py",
       "rule_id": "use-cases.return-dtos",
       "severity": "error"
@@ -54,12 +58,13 @@ JSON output is a versioned integration contract:
   ],
   "root": "/workspace/order-service",
   "summary": {"errors": 1, "warnings": 0},
-  "version": 1
+  "version": 2
 }
 ```
 
-The root is absolute. Diagnostics contain severity, rule ID, message, path, line, and column; missing
-locations are `null`. Internal symbol names are not included in JSON.
+The root is absolute. Diagnostics contain severity, rule ID, message, path, line, column, remediation
+hint, and documentation URL; optional fields may be `null`. Internal symbol names are not included.
+This architecture contract is version 2. Project-management JSON remains independently versioned.
 
 ## `specx rule list`
 
@@ -78,7 +83,8 @@ specx rule explain RULE_ID
 ```
 
 The ID must match exactly. Output includes family, default status, required project surface when one
-exists, and the rule's documentation. An unknown ID returns 2 and names the available IDs.
+exists, remediation, documentation URL, detection boundary, and the rule description. An unknown ID
+returns 2 and names the available IDs.
 
 ## Project inspection
 

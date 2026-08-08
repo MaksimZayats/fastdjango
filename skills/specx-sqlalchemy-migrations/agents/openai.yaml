@@ -1,4 +1,0 @@
-interface:
-  display_name: "specx SQLAlchemy Migrations"
-  short_description: "Add async Alembic migrations"
-  default_prompt: "Use $specx-sqlalchemy-migrations to add async Alembic migrations for a SQLAlchemy adapter."

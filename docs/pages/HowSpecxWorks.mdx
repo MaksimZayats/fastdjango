@@ -4,14 +4,14 @@ import { NextPrev } from "@storybookComponents/NextPrev"
 <Meta title="Overview/How specx works" />
 
 <Title>How specx works</Title>
-<Subtitle>Four surfaces share one architecture vocabulary but solve different parts of the job.</Subtitle>
+<Subtitle>Executable checks and typed project surfaces carry the contract; one skill is optional.</Subtitle>
 
-## Agent skill catalog
+## Optional navigation skill
 
-specx skills tell coding agents where a change belongs, which class shape to use, what to verify, and
-which mistakes to avoid.
+The single `specx` skill helps an agent inspect a project, use its commands, and follow structured
+diagnostics. It is not required to use the package or understand a generated project.
 
-Install them with `npx skills add`. Their canonical source is the repository's `skills/` directory.
+Install it with `npx skills add`. Its canonical source is the repository's `skills/specx/` directory.
 
 ## Project initializer
 
@@ -19,8 +19,8 @@ Install them with `npx skills add`. Their canonical source is the repository's `
 layout, strict tooling, a core health action, DIWire composition, and mirrored unit tests. It does not
 select FastAPI, SQLAlchemy, a database, or a deployment model.
 
-The initializer is intentionally narrow. Later changes are ordinary source changes guided by skills,
-not additional `specx add ...` generators.
+The initializer is intentionally narrow. Later changes are ordinary source changes, or typed
+use-case scaffolds exposed by `specx project`, verified by the same checks.
 
 ## Foundation library
 
@@ -39,7 +39,7 @@ from specx.delivery.foundation.controller import BaseController
 ## Architecture checker
 
 `specx check` scans Python files under `src/` and `tests/`, applies the selected static rules, and
-reports violations with semantic IDs. The same engine is available through
+reports violations with semantic IDs, remediation hints, and documentation links. The same engine is available through
 `specx.testing.architecture` for Python tests and project-specific rules.
 
 The checker is a guardrail, not a Python interpreter or type checker. It recognizes imports, class
@@ -52,7 +52,7 @@ checks, security review, and human design judgment still cover different failure
 developer request
       │
       ▼
-agent applies one or more specx skills
+agent or developer inspects project commands and public guides
       │
       ▼
 project code inherits specx foundation categories
@@ -61,7 +61,7 @@ project code inherits specx foundation categories
 Ruff + typing + tests + specx check validate the change
 ```
 
-Adopt the surfaces independently: an existing service can start with the checker, teams can use the
-bases and CLI without skills, and skills can precede enforcement.
+Executable checks are the correctness contract. An existing service can start with the checker, and
+teams can use the bases, project CLI, generated guidance, and documentation without any skill.
 
 <NextPrev current="overview-how-specx-works" />
