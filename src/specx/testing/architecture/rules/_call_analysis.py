@@ -14,9 +14,17 @@ from specx.testing.architecture.context import (
 
 AMBIENT_EXACT_CALLS = frozenset(
     {
+        "asyncio.current_task",
+        "asyncio.get_event_loop",
+        "asyncio.get_running_loop",
+        "asyncio.open_connection",
+        "asyncio.open_unix_connection",
         "asyncio.sleep",
         "asyncio.create_subprocess_exec",
         "asyncio.create_subprocess_shell",
+        "asyncio.start_server",
+        "asyncio.start_unix_server",
+        "builtins.input",
         "builtins.open",
         "datetime.date.today",
         "datetime.datetime.now",
@@ -25,7 +33,15 @@ AMBIENT_EXACT_CALLS = frozenset(
         "io.open",
         "os.access",
         "os.chdir",
+        "os.device_encoding",
+        "os.dup",
+        "os.dup2",
         "os.cpu_count",
+        "os.fdatasync",
+        "os.fdopen",
+        "os.fstat",
+        "os.fsync",
+        "os.ftruncate",
         "os.getcwd",
         "os.getegid",
         "os.geteuid",
@@ -37,11 +53,23 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.getenv",
         "os.listdir",
         "os.lstat",
+        "os.close",
         "os.kill",
         "os.killpg",
         "os.mkdir",
         "os.makedirs",
+        "os.open",
+        "os.pipe",
+        "os.pipe2",
+        "os.posix_fadvise",
+        "os.posix_fallocate",
+        "os.pread",
+        "os.preadv",
         "os.putenv",
+        "os.pwrite",
+        "os.pwritev",
+        "os.read",
+        "os.readv",
         "os.urandom",
         "os.remove",
         "os.removedirs",
@@ -51,9 +79,15 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.rmdir",
         "os.scandir",
         "os.stat",
+        "os.sendfile",
+        "os.splice",
         "os.system",
+        "os.truncate",
+        "os.ttyname",
         "os.unsetenv",
         "os.walk",
+        "os.write",
+        "os.writev",
         "os.path.exists",
         "os.path.abspath",
         "os.path.expanduser",
@@ -73,12 +107,21 @@ AMBIENT_EXACT_CALLS = frozenset(
         "getpass.getuser",
         "time.monotonic",
         "time.monotonic_ns",
+        "time.clock_gettime",
+        "time.clock_gettime_ns",
+        "time.clock_settime",
+        "time.clock_settime_ns",
+        "time.get_clock_info",
         "time.perf_counter",
         "time.perf_counter_ns",
         "time.process_time",
+        "time.process_time_ns",
         "time.sleep",
         "time.time",
         "time.time_ns",
+        "time.thread_time",
+        "time.thread_time_ns",
+        "uuid.getnode",
         "uuid.uuid1",
         "uuid.uuid4",
         "uuid.uuid6",
@@ -88,6 +131,8 @@ AMBIENT_EXACT_CALLS = frozenset(
 )
 AMBIENT_PREFIXES = (
     "aiohttp.",
+    "asyncio.get_event_loop.",
+    "asyncio.get_running_loop.",
     "glob.",
     "httpx.",
     "locale.",
@@ -110,10 +155,20 @@ FILESYSTEM_METHODS = frozenset(
         "exists",
         "expanduser",
         "glob",
+        "group",
         "home",
+        "is_block_device",
+        "is_char_device",
         "is_dir",
+        "is_fifo",
         "is_file",
+        "is_junction",
+        "is_mount",
+        "is_socket",
+        "is_symlink",
         "iterdir",
+        "lchmod",
+        "lstat",
         "mkdir",
         "open",
         "owner",
@@ -133,6 +188,29 @@ FILESYSTEM_METHODS = frozenset(
         "write_bytes",
         "write_text",
         "walk",
+    }
+)
+PATHLIB_CONSTRUCTORS = frozenset(
+    {
+        "pathlib.Path",
+        "pathlib.PosixPath",
+        "pathlib.PurePath",
+        "pathlib.PurePosixPath",
+        "pathlib.PureWindowsPath",
+        "pathlib.WindowsPath",
+    }
+)
+PATH_PRESERVING_MEMBERS = frozenset(
+    {
+        "absolute",
+        "expanduser",
+        "joinpath",
+        "parent",
+        "parents",
+        "resolve",
+        "with_name",
+        "with_stem",
+        "with_suffix",
     }
 )
 AMBIENT_VALUE_NAMES = frozenset(
@@ -228,6 +306,7 @@ def is_ambient_runtime_call(
     ):
         return True
     chain = attribute_chain(call.func)
+    receiver = attribute_chain(call.func.value) if isinstance(call.func, ast.Attribute) else ()
     path_roots: set[tuple[str, ...]] = (
         pathlib_object_chains(
             function,
@@ -244,9 +323,19 @@ def is_ambient_runtime_call(
         and chain[-1] in FILESYSTEM_METHODS
         and (
             "pathlib" in name
-            or any(part in {"Path", "PurePath"} for part in chain)
-            or any(tuple(chain[: len(root)]) == root for root in path_roots)
+            or any(_path_receiver_matches_root(receiver, root) for root in path_roots)
         )
+    )
+
+
+def _path_receiver_matches_root(
+    receiver: tuple[str, ...],
+    root: tuple[str, ...],
+) -> bool:
+    if receiver == root:
+        return True
+    return receiver[: len(root)] == root and all(
+        member in PATH_PRESERVING_MEMBERS for member in receiver[len(root) :]
     )
 
 
@@ -317,7 +406,7 @@ def _typed_datetime_chains(
             )
     names.update(
         (node.target.id,)
-        for node in ast.walk(function)
+        for node in _function_scope_nodes(function)
         if isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
         and _annotation_contains_datetime(node.annotation, path=path, context=context)
@@ -377,9 +466,9 @@ def pathlib_object_chains(
                     context=context,
                 )
             )
-    for node in ast.walk(function):
+    for node in _function_scope_nodes(function):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            if not context.qualified_name(path, node.value.func).endswith("pathlib.Path"):
+            if context.qualified_name(path, node.value.func) not in PATHLIB_CONSTRUCTORS:
                 continue
             names.update((target.id,) for target in node.targets if isinstance(target, ast.Name))
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
@@ -388,14 +477,16 @@ def pathlib_object_chains(
     changed = True
     while changed:
         changed = False
-        for node in ast.walk(function):
+        for node in _function_scope_nodes(function):
             if not isinstance(node, (ast.Assign, ast.AnnAssign)):
                 continue
             value = node.value
             if not isinstance(value, ast.BinOp) or not isinstance(value.op, ast.Div):
                 continue
             source = attribute_chain(value.left)
-            if not source or not any(tuple(source[: len(root)]) == root for root in names):
+            if not source or not any(
+                _path_receiver_matches_root(tuple(source), root) for root in names
+            ):
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
@@ -418,7 +509,7 @@ def _propagate_direct_object_aliases(
             if not isinstance(node, (ast.Assign, ast.AnnAssign)):
                 continue
             source = attribute_chain(node.value)
-            if not source or not any(tuple(source[: len(root)]) == root for root in names):
+            if not source or tuple(source) not in names:
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
@@ -447,6 +538,138 @@ def _function_scope_nodes(
     return tuple(nodes)
 
 
+def function_behavior_nodes(
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+) -> tuple[ast.AST, ...]:
+    """Return executable method nodes without dormant nested-scope bodies."""
+
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not function and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for expression in (
+                *node.decorator_list,
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+            ):
+                visit(expression)
+            return
+        if node is not function and isinstance(node, ast.ClassDef):
+            for expression in (*node.decorator_list, *node.bases):
+                visit(expression)
+            for keyword in node.keywords:
+                visit(keyword.value)
+            return
+        if isinstance(node, ast.Lambda):
+            for expression in (
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+            ):
+                visit(expression)
+            return
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(function)
+    return tuple(nodes)
+
+
+def class_method_declarations(
+    class_node: ast.ClassDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> dict[str, tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...]]:
+    """Return runtime-effective method groups, including exact function assignments."""
+
+    project_functions = _project_function_definitions(context)
+    declarations: dict[
+        str,
+        list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]],
+    ] = {}
+    for child in class_node.body:
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            existing = declarations.get(child.name, [])
+            if existing and all(
+                _function_is_overload(function, path=function_path, context=context)
+                for function_path, function in existing
+            ):
+                existing.append((path, child))
+                declarations[child.name] = existing
+            elif _function_is_overload(child, path=path, context=context):
+                declarations.setdefault(child.name, []).append((path, child))
+            else:
+                declarations[child.name] = [(path, child)]
+            continue
+        targets: tuple[ast.expr, ...] = ()
+        value: ast.expr | None = None
+        if isinstance(child, ast.Assign):
+            targets, value = tuple(child.targets), child.value
+        elif isinstance(child, ast.AnnAssign) and child.value is not None:
+            targets, value = (child.target,), child.value
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            qualified = context.qualified_name(path, value)
+            attached = project_functions.get(qualified)
+            if attached is None:
+                declarations.pop(target.id, None)
+            else:
+                declarations[target.id] = list(attached)
+    return {name: tuple(group) for name, group in declarations.items()}
+
+
+def _project_function_definitions(
+    context: ArchitectureContext,
+) -> dict[str, tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...]]:
+    definitions: dict[
+        str,
+        list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]],
+    ] = {}
+    for path in context.source_paths():
+        module = ".".join(
+            (
+                context.config.package_name,
+                *path.relative_to(context.src_root).with_suffix("").parts,
+            )
+        )
+        for function in _module_scope_function_nodes(context.tree(path)):
+            definitions.setdefault(f"{module}.{function.name}", []).append((path, function))
+    return {name: tuple(group) for name, group in definitions.items()}
+
+
+def _module_scope_function_nodes(
+    tree: ast.Module,
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions.append(node)
+            return
+        if isinstance(node, (ast.ClassDef, ast.Lambda)):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(tree)
+    return tuple(functions)
+
+
+def _function_is_overload(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    overloads = {"typing.overload", "typing_extensions.overload"}
+    return any(
+        context.qualified_names(path, decorator) <= overloads
+        for decorator in function.decorator_list
+    )
+
+
 def _annotation_contains_path(
     annotation: ast.expr | None,
     *,
@@ -471,6 +694,17 @@ def _injected_annotation_payload(
     context: ArchitectureContext,
     visited: frozenset[str],
 ) -> tuple[Path, ast.expr] | None:
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            parsed = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return None
+        return _injected_annotation_payload(
+            parsed,
+            path=path,
+            context=context,
+            visited=visited,
+        )
     if (
         isinstance(annotation, ast.Subscript)
         and context.qualified_name(path, annotation.value) == "diwire.Injected"

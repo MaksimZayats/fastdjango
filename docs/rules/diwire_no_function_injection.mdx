@@ -33,7 +33,7 @@ class Handler(BaseController):
 ### Detection notes
 
 Recognizes exact `resolver_context.inject` calls and definition-time decorator aliases plus
-`diwire.Injected[...]`, same-module or imported project injection aliases, and exact DIWire injection
-markers on functions and methods. Unrelated `Annotated` metadata containing the word "Injected",
+`diwire.Injected[...]`, quoted forward annotations, same-module or imported project injection aliases,
+and exact DIWire injection markers on functions and methods. Unrelated `Annotated` metadata containing the word "Injected",
 constructor fields, and ordinary pytest parameters pass. Direct function-level service location via
 `resolver_context.resolve` or `resolver_context.aresolve` is also rejected.

@@ -15,6 +15,8 @@ from specx.testing.architecture.rules._call_analysis import (
     ambient_environment_nodes,
     ambient_runtime_value_nodes,
     class_hierarchy,
+    class_method_declarations,
+    function_behavior_nodes,
     is_ambient_runtime_call,
     resolved_call_name,
 )
@@ -78,18 +80,20 @@ class CoreBehaviorNoAmbientRuntimeAccessRule(ArchitectureRuleBase):
                     path=path,
                     context=context,
                 ):
-                    for function in (
-                        child
-                        for child in method_owner.body
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                        and child.name not in seen_methods
-                    ):
-                        seen_methods.add(function.name)
+                    for method_name, declarations in class_method_declarations(
+                        method_owner,
+                        path=method_path,
+                        context=context,
+                    ).items():
+                        if method_name in seen_methods:
+                            continue
+                        seen_methods.add(method_name)
+                        function_path, function = declarations[-1]
                         findings.extend(
                             _ambient_method_findings(
                                 self.id,
                                 context=context,
-                                path=method_path,
+                                path=function_path,
                                 behavior_path=path,
                                 behavior_class=behavior_class,
                                 function=function,
@@ -110,7 +114,7 @@ def _ambient_method_findings(
     findings: list[SpecxArchitectureViolation] = []
     ambient_candidates = [
         call
-        for call in ast.walk(function)
+        for call in function_behavior_nodes(function)
         if isinstance(call, ast.Call)
         and is_ambient_runtime_call(
             call,
@@ -143,10 +147,11 @@ def _ambient_method_findings(
             )
         )
     tree = context.tree(path)
+    behavior_node_ids = {id(node) for node in function_behavior_nodes(function)}
     for node in ambient_environment_nodes(tree, path=path, context=context):
         if any(node in ast.walk(call) for call in ambient_calls):
             continue
-        if any(node is descendant for descendant in ast.walk(function)):
+        if id(node) in behavior_node_ids:
             findings.append(
                 violation(
                     rule_id,
@@ -159,7 +164,7 @@ def _ambient_method_findings(
     for node in ambient_runtime_value_nodes(tree, path=path, context=context):
         if any(node in ast.walk(call) for call in ambient_calls):
             continue
-        if any(node is descendant for descendant in ast.walk(function)):
+        if id(node) in behavior_node_ids:
             findings.append(
                 violation(
                     rule_id,

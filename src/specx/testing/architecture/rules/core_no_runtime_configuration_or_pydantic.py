@@ -14,6 +14,9 @@ from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._call_analysis import (
     ambient_environment_nodes,
+    class_hierarchy,
+    class_method_declarations,
+    function_behavior_nodes,
     resolved_call_name,
 )
 from specx.testing.architecture.rules._shared import ArchitectureRuleBase, violation
@@ -47,6 +50,10 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
                 "pydantic.root_model.RootModel",
             },
             exact_decorators={"pydantic.dataclasses.dataclass"},
+        )
+        behavior_nodes = _behavior_method_node_ids(
+            context=context,
+            definition_index=definition_index,
         )
         for path in sorted(context.ast_project.files):
             if not path.is_relative_to(core_root):
@@ -123,12 +130,6 @@ class CoreNoRuntimeConfigurationOrPydanticRule(ArchitectureRuleBase):
                     )
                 )
             ]
-            behavior_nodes = _behavior_method_node_ids(
-                tree,
-                path=path,
-                context=context,
-                definition_index=definition_index,
-            )
             for call in environment_calls:
                 if id(call) in behavior_nodes:
                     continue
@@ -163,12 +164,35 @@ def _qualified_project_type_references(
     context: ArchitectureContext,
     qualified_types: set[str],
 ) -> set[str]:
-    return {
+    references = {
         qualified
         for node in ast.walk(tree)
         if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load)
         if (qualified := context.qualified_name(path, node)) in qualified_types
     }
+    for annotation in (
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ):
+        value = annotation.value
+        if not isinstance(value, str):
+            continue
+        try:
+            parsed = ast.parse(value, mode="eval")
+        except SyntaxError:
+            continue
+        expression = parsed.body
+        for node in ast.walk(expression):
+            ast.copy_location(node, annotation)
+            if not isinstance(node, (ast.Name, ast.Attribute)) or not isinstance(
+                node.ctx, ast.Load
+            ):
+                continue
+            qualified = context.qualified_name(path, node)
+            if qualified in qualified_types:
+                references.add(qualified)
+    return references
 
 
 def _project_subclasses_of(
@@ -250,6 +274,23 @@ def _project_subclasses_of(
                 if context.qualified_name(path, value) in exact_bases | subclasses:
                     subclasses.add(qualified_alias)
                     changed = True
+            for statement in context.tree(path).body:
+                if not isinstance(statement, ast.ImportFrom):
+                    continue
+                for imported in statement.names:
+                    if imported.name == "*":
+                        continue
+                    local_name = imported.asname or imported.name
+                    reference = ast.copy_location(
+                        ast.Name(id=local_name, ctx=ast.Load()),
+                        statement,
+                    )
+                    if context.qualified_name(path, reference) not in exact_bases | subclasses:
+                        continue
+                    qualified_alias = f"{module}.{local_name}"
+                    if qualified_alias not in subclasses:
+                        subclasses.add(qualified_alias)
+                        changed = True
     return subclasses
 
 
@@ -272,28 +313,41 @@ def _imported_symbol_names(
 
 
 def _behavior_method_node_ids(
-    tree: ast.Module,
     *,
-    path: Path,
     context: ArchitectureContext,
     definition_index: dict[str, tuple[tuple[Path, set[str]], ...]],
 ) -> set[int]:
     behavior_bases = {"BaseUseCase", "BasePureService", "BaseReadService", "BaseEffectService"}
-    return {
-        id(descendant)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef)
-        and any(
-            class_has_foundation_base_at(
-                node,
-                base,
-                source_path=path,
-                context=context,
-                definition_index=definition_index,
-            )
-            for base in behavior_bases
-        )
-        for method in node.body
-        if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-        for descendant in ast.walk(method)
-    }
+    node_ids: set[int] = set()
+    for path in context.source_paths():
+        for node in (
+            candidate
+            for candidate in ast.walk(context.tree(path))
+            if isinstance(candidate, ast.ClassDef)
+        ):
+            if not any(
+                class_has_foundation_base_at(
+                    node,
+                    base,
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                )
+                for base in behavior_bases
+            ):
+                continue
+            seen_methods: set[str] = set()
+            for owner_path, owner in class_hierarchy(node, path=path, context=context):
+                for method_name, declarations in class_method_declarations(
+                    owner,
+                    path=owner_path,
+                    context=context,
+                ).items():
+                    if method_name in seen_methods:
+                        continue
+                    seen_methods.add(method_name)
+                    _method_path, method = declarations[-1]
+                    node_ids.update(
+                        id(descendant) for descendant in function_behavior_nodes(method)
+                    )
+    return node_ids

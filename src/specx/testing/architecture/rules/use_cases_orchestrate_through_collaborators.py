@@ -14,6 +14,8 @@ from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._call_analysis import (
     call_is_injected_collaborator_or_uow,
     class_hierarchy,
+    class_method_declarations,
+    function_behavior_nodes,
     is_ambient_runtime_call,
     is_statically_recognized_constructor,
     resolved_call_name,
@@ -62,18 +64,19 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
                     path=path,
                     context=context,
                 ):
-                    for function in (
-                        child
-                        for child in method_owner.body
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                        and not child.name.startswith("__")
-                        and child.name not in seen_methods
-                    ):
-                        seen_methods.add(function.name)
+                    for method_name, declarations in class_method_declarations(
+                        method_owner,
+                        path=method_path,
+                        context=context,
+                    ).items():
+                        if method_name.startswith("__") or method_name in seen_methods:
+                            continue
+                        seen_methods.add(method_name)
+                        function_path, function = declarations[-1]
                         findings.extend(
                             self._check_method(
                                 context,
-                                path=method_path,
+                                path=function_path,
                                 use_case_path=path,
                                 use_case_class=class_node,
                                 function=function,
@@ -100,7 +103,9 @@ class UseCasesOrchestrateThroughCollaboratorsRule(ArchitectureRuleBase):
         function: ast.FunctionDef | ast.AsyncFunctionDef,
     ) -> list[SpecxArchitectureViolation]:
         findings: list[SpecxArchitectureViolation] = []
-        for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
+        for call in (
+            node for node in function_behavior_nodes(function) if isinstance(node, ast.Call)
+        ):
             qualified_name = resolved_call_name(call, path=path, context=context)
             if is_ambient_runtime_call(
                 call,

@@ -185,7 +185,8 @@ def test_revision_evidence_after_return_is_unreachable(tmp_path: Path) -> None:
     _write(
         tmp_path / "migrations/versions/0001.py",
         "from alembic import op\n\n"
-        "revision = '0001'\n\n"
+        "revision = '0001'\n"
+        "down_revision = None\n\n"
         "def upgrade():\n"
         "    return\n"
         "    op.create_table('orders')\n\n"
@@ -261,7 +262,8 @@ def _write_project(tmp_path: Path, *, command_prefix: str = "uv run alembic") ->
     _write(
         tmp_path / "migrations/versions/0001.py",
         "from alembic import op\n\n"
-        "revision = '0001'\n\n"
+        "revision = '0001'\n"
+        "down_revision = None\n\n"
         "def upgrade(): op.create_table('orders')\n"
         "def downgrade(): pass\n",
     )

@@ -30,6 +30,19 @@ def test_function_di_resolves_project_aliases_without_annotated_false_positives(
     assert [item.symbol for item in report.violations] == ["bad"]
 
 
+def test_function_di_rejects_quoted_injected_annotations(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "tests/unit/test_handler.py",
+        "from diwire import Injected\n\n"
+        "class Worker: pass\n\n"
+        "def bad(worker: 'Injected[Worker]'): pass\n",
+    )
+
+    report = _check_only(tmp_path, SpecxRuleId.DIWIRE_NO_FUNCTION_INJECTION)
+
+    assert [item.symbol for item in report.violations] == ["bad"]
+
+
 def test_legacy_injected_aliases_work_for_fields_and_fail_for_parameters(
     tmp_path: Path,
 ) -> None:

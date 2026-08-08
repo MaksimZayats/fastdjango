@@ -28,17 +28,40 @@ class OrderModel(BaseSQLAlchemyModel):
 ```python
 class OrderModel(BaseSQLAlchemyModel):
     pass  # Alembic config, revision, Make commands, and integration test exist
+
+# migrations/versions/2026_08_08_add_orders.py
+from alembic import op
+
+revision = "2026_08_08_add_orders"
+down_revision = None
+
+def upgrade() -> None:
+    op.create_table("orders")
 ```
 
 ### Detection notes
 
-When a concrete model exists, parses Alembic configuration and Python imports for Alembic-qualified
-configuration and migration calls, an invoked migration entrypoint, an operational revision, and
-upgrade-and-drift evidence in the same executable, non-skipped test body. Standard async Alembic
-helper and `run_sync` callback chains are followed statically. It also shell-tokenizes `migrate`,
-`makemigrations`, and `migration-check` recipes and requires them to invoke Alembic directly;
-comments, `echo`, dead branches, swallowed failures, rebound Alembic imports, and uncalled helpers do
-not count. Common
-direct runners such as `uv run --locked alembic`, `env NAME=value alembic`, and absolute Alembic
-executables count. Statically abstract declarative foundation classes do not activate the rule unless
-they declare a concrete table mapping.
+When a concrete model exists, this rule parses Alembic configuration and Python imports for
+Alembic-qualified configuration and migration calls. It recognizes models descending from the specx
+SQLAlchemy base or a project `sqlalchemy.orm.DeclarativeBase`.
+
+An environment entrypoint must be invoked during Alembic module import, not only behind an
+`if __name__ == "__main__"` guard. Every passing path through that entrypoint must configure the
+Alembic context and run migrations on the same path. Standard async Alembic helper and `run_sync`
+callback chains are followed statically.
+
+An operational revision declares both `revision` and `down_revision`, defines `upgrade` and
+`downgrade`, and performs a recognized forward migration effect on every passing upgrade path.
+Read-only access such as `op.get_bind()` is not sufficient; direct operations and operations through
+`op.batch_alter_table` count.
+
+The migration integration module needs one executable test whose every passing path both upgrades to
+head and performs a drift check. Module-, class-, or function-level unconditional pytest skip/xfail
+markers disable evidence. Statically false conditional markers remain eligible. Calls inside
+`pytest.raises`, `contextlib.suppress`, or exception handlers that can swallow failures do not count,
+and calls after exhaustive return/raise control flow are unreachable.
+
+The rule also shell-tokenizes `migrate`, `makemigrations`, and `migration-check` recipes and requires
+them to invoke Alembic directly. Comments, `echo`, dead branches, swallowed failures, rebound Alembic
+imports, and uncalled helpers do not count. Common direct runners such as
+`uv run --locked alembic`, `env NAME=value alembic`, and absolute Alembic executables count.

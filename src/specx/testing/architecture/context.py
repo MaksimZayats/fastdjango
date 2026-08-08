@@ -791,9 +791,29 @@ def project_class_qualified_names(context: ArchitectureContext) -> frozenset[str
     return frozenset(
         qualified_class_name(node, source_path=path, context=context)
         for path in context.source_paths()
-        for node in context.tree(path).body
-        if isinstance(node, ast.ClassDef)
+        for node in module_scope_class_nodes(context.tree(path))
     )
+
+
+def module_scope_class_nodes(tree: ast.Module) -> tuple[ast.ClassDef, ...]:
+    """Return classes bound in module scope, including control-flow declarations."""
+
+    classes: list[ast.ClassDef] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.ClassDef):
+            classes.append(node)
+            return
+        if node is not tree and isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(tree)
+    return tuple(classes)
 
 
 def class_is_statically_abstract_at(
@@ -910,10 +930,10 @@ def _unimplemented_abstract_methods(
 ) -> set[str]:
     hierarchy = project_class_hierarchy(node, path=source_path, context=context)
     method_names = {
-        child.name
+        name
         for _owner_path, owner in hierarchy
         for child in owner.body
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for name in _class_bound_names(child)
     }
     required: set[str] = set()
     for method_name in method_names:
@@ -922,14 +942,16 @@ def _unimplemented_abstract_methods(
                 (
                     child
                     for child in reversed(owner.body)
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and child.name == method_name
+                    if method_name in _class_bound_names(child)
                 ),
                 None,
             )
             if declaration is None:
                 continue
-            if _method_is_statically_abstract(
+            if isinstance(
+                declaration,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ) and _method_is_statically_abstract(
                 declaration,
                 path=owner_path,
                 context=context,
@@ -937,6 +959,16 @@ def _unimplemented_abstract_methods(
                 required.add(method_name)
             break
     return required
+
+
+def _class_bound_names(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return {statement.name}
+    if isinstance(statement, ast.Assign):
+        return {target.id for target in statement.targets if isinstance(target, ast.Name)}
+    if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+        return {statement.target.id} if statement.value is not None else set()
+    return set()
 
 
 def _method_is_statically_abstract(
@@ -971,10 +1003,12 @@ def project_class_hierarchy(
             node,
         )
         for candidate_path in context.source_paths()
-        for node in context.tree(candidate_path).body
-        if isinstance(node, ast.ClassDef)
+        for node in module_scope_class_nodes(context.tree(candidate_path))
     }
     root = qualified_class_name(class_node, source_path=path, context=context)
+    # Rules also discover lexically nested classes. They are not importable under this
+    # simple name, but their own methods and project ancestors still need enforcement.
+    definitions[root] = (path, class_node)
     cache: dict[str, tuple[str, ...]] = {}
 
     def linearize(qualified: str, visiting: frozenset[str]) -> tuple[str, ...]:
@@ -1355,6 +1389,11 @@ def _flow_bindings_to_target(
     current = dict(state)
     for statement in statements:
         if _contains_node(statement, target):
+            branch_entry = _flow_statement_entry_bindings(
+                statement,
+                current,
+                before_target=target,
+            )
             if isinstance(statement, ast.Try):
                 if any(_contains_node(child, target) for child in statement.finalbody):
                     before_final = _flow_try_before_finally(
@@ -1396,11 +1435,11 @@ def _flow_bindings_to_target(
                 if any(_contains_node(child, target) for child in branch):
                     return _flow_bindings_to_target(
                         branch,
-                        current,
+                        branch_entry,
                         target=target,
                         module_name=module_name,
                     )
-            return current, True
+            return branch_entry, True
         current = _flow_statement_bindings(statement, current, module_name=module_name)
     return current, False
 
@@ -1411,7 +1450,7 @@ def _flow_statement_bindings(
     *,
     module_name: str,
 ) -> dict[str, frozenset[str]]:
-    current = dict(state)
+    current = _flow_statement_entry_bindings(statement, state)
     if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
         targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
         for target in targets:
@@ -1438,6 +1477,51 @@ def _flow_statement_bindings(
         return _merge_binding_states(branch_states)
     _update_choice_binding(statement, current, module_name=module_name)
     return current
+
+
+def _flow_statement_entry_bindings(
+    statement: ast.stmt,
+    state: dict[str, frozenset[str]],
+    *,
+    before_target: ast.AST | None = None,
+) -> dict[str, frozenset[str]]:
+    current = dict(state)
+    expressions: tuple[ast.expr, ...] = ()
+    if isinstance(statement, (ast.If, ast.While)):
+        expressions = (statement.test,)
+    elif isinstance(statement, (ast.For, ast.AsyncFor)):
+        expressions = (statement.iter,)
+    elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Return)):
+        expressions = (statement.value,) if statement.value is not None else ()
+    elif isinstance(statement, ast.Raise):
+        expressions = tuple(
+            expression for expression in (statement.exc, statement.cause) if expression is not None
+        )
+    elif isinstance(statement, ast.Assert):
+        expressions = (statement.test,) + ((statement.msg,) if statement.msg is not None else ())
+    elif isinstance(statement, (ast.With, ast.AsyncWith)):
+        expressions = tuple(item.context_expr for item in statement.items)
+    elif isinstance(statement, ast.Match):
+        expressions = (statement.subject,)
+    for expression in expressions:
+        for node in ast.walk(expression):
+            if isinstance(node, ast.NamedExpr) and (
+                before_target is None or _node_ends_before(node, before_target)
+            ):
+                _bind_choice_target(node.target, node.value, current)
+    return current
+
+
+def _node_ends_before(node: ast.AST, target: ast.AST) -> bool:
+    end_line = getattr(node, "end_lineno", None)
+    end_column = getattr(node, "end_col_offset", None)
+    target_line = getattr(target, "lineno", None)
+    target_column = getattr(target, "col_offset", None)
+    if not all(
+        isinstance(value, int) for value in (end_line, end_column, target_line, target_column)
+    ):
+        return False
+    return (end_line, end_column) <= (target_line, target_column)
 
 
 def _flow_try_before_finally(

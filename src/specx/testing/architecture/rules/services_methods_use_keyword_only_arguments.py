@@ -10,7 +10,10 @@ from specx.testing.architecture.context import (
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
-from specx.testing.architecture.rules._call_analysis import class_hierarchy
+from specx.testing.architecture.rules._call_analysis import (
+    class_hierarchy,
+    class_method_declarations,
+)
 from specx.testing.architecture.rules._shared import ArchitectureRuleBase, violation
 
 
@@ -48,31 +51,26 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
                     path=path,
                     context=context,
                 ):
-                    declarations_by_name: dict[
-                        str,
-                        list[ast.FunctionDef | ast.AsyncFunctionDef],
-                    ] = {}
-                    for child in method_owner.body:
-                        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            continue
-                        if child.name.startswith("_"):
-                            continue
-                        declarations_by_name.setdefault(child.name, []).append(child)
-                    for method_name, declarations in declarations_by_name.items():
-                        if method_name in seen_methods:
+                    for method_name, declarations in class_method_declarations(
+                        method_owner,
+                        path=method_path,
+                        context=context,
+                    ).items():
+                        if method_name.startswith("_") or method_name in seen_methods:
                             continue
                         seen_methods.add(method_name)
-                        for method in declarations:
-                            declaration = (method_path, id(method))
+                        for declaration_path, method in declarations:
+                            declaration = (declaration_path, id(method))
                             if declaration in checked_declarations:
                                 continue
                             checked_declarations.add(declaration)
                             findings.extend(
                                 _method_findings(
                                     self.id,
-                                    path=method_path,
+                                    path=declaration_path,
                                     class_node=class_node,
                                     method=method,
+                                    method_name=method_name,
                                     context=context,
                                 )
                             )
@@ -85,6 +83,7 @@ def _method_findings(
     path: Path,
     class_node: ast.ClassDef,
     method: ast.FunctionDef | ast.AsyncFunctionDef,
+    method_name: str,
     context: ArchitectureContext,
 ) -> list[SpecxArchitectureViolation]:
     positional_arguments = [*method.args.posonlyargs, *method.args.args]
@@ -99,7 +98,7 @@ def _method_findings(
         violation(
             rule_id,
             path=path,
-            symbol=f"{class_node.name}.{method.name}",
+            symbol=f"{class_node.name}.{method_name}",
             node=method,
             message=f"public parameters must be keyword-only: {positional}",
         )

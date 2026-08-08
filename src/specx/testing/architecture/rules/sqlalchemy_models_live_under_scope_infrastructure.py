@@ -47,13 +47,25 @@ class SQLAlchemyModelsLiveUnderScopeInfrastructureRule(ArchitectureRuleBase):
                     )
                 ):
                     continue
-                if not correctly_placed and class_has_foundation_base_at(
+                is_specx_model = class_has_foundation_base_at(
                     node,
                     "BaseSQLAlchemyModel",
                     source_path=path,
                     context=context,
                     definition_index=definition_index,
-                ):
+                )
+                is_raw_mapped_model = class_has_sqlalchemy_mapping_at(
+                    node,
+                    source_path=path,
+                    context=context,
+                ) and class_has_foundation_base_at(
+                    node,
+                    "sqlalchemy.orm.DeclarativeBase",
+                    source_path=path,
+                    context=context,
+                    definition_index=definition_index,
+                )
+                if not correctly_placed and (is_specx_model or is_raw_mapped_model):
                     findings.append(
                         violation(
                             self.id,

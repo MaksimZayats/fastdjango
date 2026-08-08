@@ -300,6 +300,7 @@ def test_sqlalchemy_model_placement_and_alembic_surface(tmp_path: Path) -> None:
         tmp_path / "migrations/versions/0001_orders.py",
         "from alembic import op\n\n"
         "revision = '0001'\n"
+        "down_revision = None\n"
         "def upgrade(): op.execute('SELECT 1')\n"
         "def downgrade(): op.execute('SELECT 1')\n",
     )
@@ -600,6 +601,7 @@ def test_alembic_rule_requires_real_provenance_executable_tests_and_commands(
         tmp_path / "migrations/versions/0001.py",
         "from alembic import op\n"
         "revision = '0001'\n"
+        "down_revision = None\n"
         "def upgrade(): op.execute('SELECT 1')\n"
         "def downgrade(): op.execute('SELECT 1')\n",
     )
@@ -1213,6 +1215,29 @@ def test_mapped_base_named_model_is_concrete_and_foundation_names_are_exact(
 
     assert [item.symbol for item in placement.violations] == ["BaseOrderModel"]
     assert orchestration.violations == ()
+
+
+def test_raw_sqlalchemy_declarative_models_still_require_scope_placement(
+    tmp_path: Path,
+) -> None:
+    _write(
+        _source(tmp_path, "foundation/orm.py"),
+        "from sqlalchemy.orm import DeclarativeBase\n\n"
+        "class ProjectModelBase(DeclarativeBase): pass\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/entities/order.py"),
+        "from demo_service.foundation.orm import ProjectModelBase\n\n"
+        "class OrderModel(ProjectModelBase):\n"
+        "    __tablename__ = 'orders'\n",
+    )
+
+    report = _check_only(
+        tmp_path,
+        SpecxRuleId.SQLALCHEMY_MODELS_LIVE_UNDER_SCOPE_INFRASTRUCTURE,
+    )
+
+    assert [item.symbol for item in report.violations] == ["OrderModel"]
 
 
 @pytest.mark.parametrize("name", ["gather", "asyncio.*", "asyncio..gather", "class.call"])

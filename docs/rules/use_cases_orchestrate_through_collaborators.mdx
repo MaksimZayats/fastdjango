@@ -39,7 +39,11 @@ Checks inherited project methods and resolves definition-time aliases, shadowing
 control-flow branches conservatively. Statically indexed project classes, deterministic built-in and
 standard-library value constructors, typed injected collaborator calls, manager-owned UoW calls, and
 exact configured names pass. Project package re-exports and legacy or PEP 695 injected aliases are
-resolved. Effective C3 field overrides and field reassignment remove injected-field trust. An injected
-plain `Callable`, including a project type alias, is still a function rather than an architectural
+resolved, including quoted `Injected[...]` field annotations. Effective C3 field overrides and field
+reassignment remove injected-field trust. Methods declared under module control flow, lexically nested
+foundation subclasses, statically attached project functions, and the runtime implementation behind
+an overload group are checked. Calls in dormant nested function, class, and lambda bodies are not
+attributed to the enclosing use case; their definition-time expressions are. An injected plain
+`Callable`, including a project type alias, is still a function rather than an architectural
 collaborator. Unverifiable external constructors can be approved by exact qualified name; uppercase
 helper functions do not pass merely because of capitalization. Dynamic dispatch is not inferred.

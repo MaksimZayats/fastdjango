@@ -38,7 +38,12 @@ class TokenService(BaseEffectService):
 Checks methods inherited through project bases and mixins. It recognizes documented standard-library
 and client effect APIs through conservative branch-aware aliases, including environment, process,
 locale, timezone, network, and filesystem calls, ambient values such as `sys.argv`, and typed or
-derived `pathlib.Path` values. Local-time conversions such as no-timezone `fromtimestamp()` and
-`astimezone()` on typed datetime values are ambient; conversions with an explicit timezone remain
-deterministic. Typed Path and datetime provenance follows local aliases, and effective methods follow
-Python C3 inheritance. Project-specific wrappers and fully dynamic dispatch still require review.
+derived `pathlib.Path` values. Path checks require exact `pathlib` constructor or annotation provenance,
+so an unrelated project class named `Path` and deterministic string operations on `path.name` are not
+treated as filesystem access. Low-level descriptor IO, asyncio connection and server creation, runtime
+clocks, and OS-derived UUID/node identifiers are included. Local-time conversions such as no-timezone
+`fromtimestamp()` and `astimezone()` on typed datetime values are ambient; conversions with an explicit
+timezone remain deterministic. Walrus aliases participate in flow analysis. Effective methods follow
+Python C3 inheritance and inherited behavior has one diagnostic owner. Calls in dormant nested function,
+class, and lambda bodies are not attributed to the enclosing behavior; their definition-time expressions
+are. Project-specific wrappers and fully dynamic dispatch still require review.

@@ -4,7 +4,9 @@ import ast
 import configparser
 import re
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
@@ -16,6 +18,46 @@ from specx.testing.architecture.context import (
 from specx.testing.architecture.models import SpecxArchitectureViolation
 from specx.testing.architecture.rule_id import SpecxRuleId
 from specx.testing.architecture.rules._shared import ArchitectureRuleBase, violation
+
+_CONFIGURE_EVIDENCE = "alembic.context.configure"
+_RUN_MIGRATIONS_EVIDENCE = "alembic.context.run_migrations"
+_UPGRADE_EVIDENCE = "alembic.command.upgrade"
+_DRIFT_EVIDENCE = frozenset(
+    {
+        "alembic.autogenerate.compare_metadata",
+        "alembic.autogenerate.produce_migrations",
+        "alembic.command.check",
+    }
+)
+_REVISION_EFFECT_METHODS = frozenset(
+    {
+        "add_column",
+        "alter_column",
+        "bulk_insert",
+        "create_check_constraint",
+        "create_exclude_constraint",
+        "create_foreign_key",
+        "create_index",
+        "create_primary_key",
+        "create_table",
+        "create_table_comment",
+        "create_unique_constraint",
+        "drop_column",
+        "drop_constraint",
+        "drop_index",
+        "drop_table",
+        "drop_table_comment",
+        "execute",
+        "rename_table",
+    }
+)
+_FlowTermination = Literal["next", "return", "raise", "break", "continue"]
+
+
+@dataclass(frozen=True, slots=True)
+class _EvidencePath:
+    evidence: frozenset[str]
+    termination: _FlowTermination = "next"
 
 
 class SQLAlchemyModelsRequireAlembicRule(ArchitectureRuleBase):
@@ -84,23 +126,41 @@ def _has_concrete_model(context: ArchitectureContext) -> bool:
         if any(
             isinstance(node, ast.ClassDef)
             and (
-                not class_is_statically_abstract_at(
-                    node,
-                    source_path=path,
-                    context=context,
+                (
+                    (
+                        not class_is_statically_abstract_at(
+                            node,
+                            source_path=path,
+                            context=context,
+                        )
+                        or class_has_sqlalchemy_mapping_at(
+                            node,
+                            source_path=path,
+                            context=context,
+                        )
+                    )
+                    and class_has_foundation_base_at(
+                        node,
+                        "BaseSQLAlchemyModel",
+                        source_path=path,
+                        context=context,
+                        definition_index=definition_index,
+                    )
                 )
-                or class_has_sqlalchemy_mapping_at(
-                    node,
-                    source_path=path,
-                    context=context,
+                or (
+                    class_has_sqlalchemy_mapping_at(
+                        node,
+                        source_path=path,
+                        context=context,
+                    )
+                    and class_has_foundation_base_at(
+                        node,
+                        "sqlalchemy.orm.DeclarativeBase",
+                        source_path=path,
+                        context=context,
+                        definition_index=definition_index,
+                    )
                 )
-            )
-            and class_has_foundation_base_at(
-                node,
-                "BaseSQLAlchemyModel",
-                source_path=path,
-                context=context,
-                definition_index=definition_index,
             )
             for node in ast.walk(context.tree(path))
         ):
@@ -157,17 +217,35 @@ def _has_required_markers(name: str, text: str) -> bool:
                 bindings=bindings,
             )
         }
-        return bool(valid_entrypoints) and any(
-            _qualified_call_name(call, bindings, scope=tree) in valid_entrypoints
-            for call in _module_executable_calls(tree, bindings=bindings)
+        return bool(valid_entrypoints) and _module_invokes_entrypoint_at_import(
+            tree,
+            entrypoints=valid_entrypoints,
+            bindings=bindings,
         )
     bindings = _import_bindings(tree)
-    return any(
-        _test_function_has_migration_evidence(node, bindings=bindings)
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("test_")
-    )
+    if _pytestmark_body_is_disabled(tree.body, bindings=bindings):
+        return False
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+            and _test_function_has_migration_evidence(node, bindings=bindings)
+        ):
+            return True
+        if not isinstance(node, ast.ClassDef) or not node.name.startswith("Test"):
+            continue
+        if _pytest_decorators_disable(node.decorator_list, bindings=bindings):
+            continue
+        if _pytestmark_body_is_disabled(node.body, bindings=bindings):
+            continue
+        if any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and child.name.startswith("test_")
+            and _test_function_has_migration_evidence(child, bindings=bindings)
+            for child in node.body
+        ):
+            return True
+    return False
 
 
 def _valid_revision(text: str) -> bool:
@@ -185,6 +263,15 @@ def _valid_revision(text: str) -> bool:
         and bool(node.value.value)
         for node in tree.body
     )
+    assigned_down_revision = any(
+        isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "down_revision"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+        and node.value is not None
+        for node in tree.body
+    )
     functions = {
         node.name: node
         for node in tree.body
@@ -192,14 +279,28 @@ def _valid_revision(text: str) -> bool:
     }
     bindings = _import_bindings(tree)
     upgrade = functions.get("upgrade")
-    has_alembic_operation = any(
-        _qualified_call_name(call, bindings, scope=upgrade).startswith("alembic.op.")
-        for call in (
-            _calls_in_executable_scope(upgrade, bindings=bindings) if upgrade is not None else ()
+    passing_paths = (
+        _passing_evidence_paths(
+            upgrade,
+            bindings=bindings,
+            functions=functions,
         )
+        if upgrade is not None
+        else ()
+    )
+    has_alembic_operation = bool(passing_paths) and all(
+        any(
+            evidence.rsplit(".", maxsplit=1)[-1] in _REVISION_EFFECT_METHODS
+            and evidence.startswith("alembic.op.")
+            for evidence in path
+        )
+        for path in passing_paths
     )
     return (
-        assigned_revision and {"upgrade", "downgrade"} <= functions.keys() and has_alembic_operation
+        assigned_revision
+        and assigned_down_revision
+        and {"upgrade", "downgrade"} <= functions.keys()
+        and has_alembic_operation
     )
 
 
@@ -233,22 +334,12 @@ def _test_function_has_migration_evidence(
 ) -> bool:
     if _test_is_unconditionally_skipped_or_xfailed(function, bindings=bindings):
         return False
-    calls = _calls_in_executable_scope(
+    passing_paths = _passing_evidence_paths(
         function,
         bindings=bindings,
-        exclude_swallowing=True,
     )
-    return any(
-        _qualified_call_name(call, bindings, scope=function) == "alembic.command.upgrade"
-        for call in calls
-    ) and any(
-        _qualified_call_name(call, bindings, scope=function)
-        in {
-            "alembic.autogenerate.compare_metadata",
-            "alembic.autogenerate.produce_migrations",
-            "alembic.command.check",
-        }
-        for call in calls
+    return bool(passing_paths) and all(
+        _UPGRADE_EVIDENCE in path and bool(path & _DRIFT_EVIDENCE) for path in passing_paths
     )
 
 
@@ -257,24 +348,69 @@ def _test_is_unconditionally_skipped_or_xfailed(
     *,
     bindings: dict[str, str],
 ) -> bool:
-    for decorator in function.decorator_list:
-        target = decorator.func if isinstance(decorator, ast.Call) else decorator
-        qualified = _qualified_expression_name(target, bindings)
-        if qualified == "pytest.mark.skip":
+    return _pytest_decorators_disable(function.decorator_list, bindings=bindings)
+
+
+def _pytest_decorators_disable(
+    decorators: list[ast.expr],
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    return any(_pytest_marker_disables(decorator, bindings=bindings) for decorator in decorators)
+
+
+def _pytestmark_body_is_disabled(
+    body: list[ast.stmt],
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    return any(
+        isinstance(statement, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "pytestmark"
+            for target in (
+                statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            )
+        )
+        and statement.value is not None
+        and _pytestmark_expression_disables(statement.value, bindings=bindings)
+        for statement in body
+    )
+
+
+def _pytestmark_expression_disables(
+    expression: ast.expr,
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    if isinstance(expression, (ast.List, ast.Tuple, ast.Set)):
+        return any(
+            _pytestmark_expression_disables(element, bindings=bindings)
+            for element in expression.elts
+        )
+    return _pytest_marker_disables(expression, bindings=bindings)
+
+
+def _pytest_marker_disables(
+    decorator: ast.expr,
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    qualified = _qualified_expression_name(target, bindings)
+    if qualified == "pytest.mark.skip":
+        return True
+    if qualified == "pytest.mark.xfail":
+        if not isinstance(decorator, ast.Call):
             return True
-        if qualified == "pytest.mark.xfail":
-            if not isinstance(decorator, ast.Call):
-                return True
-            condition = _marker_condition(decorator)
-            return condition is None or _is_statically_true(condition)
-        if (
-            qualified == "pytest.mark.skipif"
-            and isinstance(decorator, ast.Call)
-            and (condition := _marker_condition(decorator)) is not None
-            and _is_statically_true(condition)
-        ):
-            return True
-    return False
+        condition = _marker_condition(decorator)
+        return condition is None or _is_statically_true(condition)
+    return bool(
+        qualified == "pytest.mark.skipif"
+        and isinstance(decorator, ast.Call)
+        and (condition := _marker_condition(decorator)) is not None
+        and _is_statically_true(condition)
+    )
 
 
 def _marker_condition(decorator: ast.Call) -> ast.expr | None:
@@ -314,41 +450,536 @@ def _calls_in_executable_scope(
     )
 
 
+def _passing_evidence_paths(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    visited: frozenset[str] = frozenset(),
+) -> tuple[frozenset[str], ...]:
+    function_key = function.name
+    if function_key in visited:
+        return (frozenset(),)
+    paths = _flow_block(
+        function.body,
+        (_EvidencePath(frozenset()),),
+        scope=function,
+        bindings=bindings,
+        functions=functions or {},
+        visited=visited | {function_key},
+        batch_aliases=_batch_operation_aliases(function, bindings=bindings),
+    )
+    return tuple(path.evidence for path in paths if path.termination in {"next", "return"})
+
+
+def _flow_block(
+    statements: list[ast.stmt],
+    paths: tuple[_EvidencePath, ...],
+    *,
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: frozenset[str],
+    batch_aliases: frozenset[str],
+) -> tuple[_EvidencePath, ...]:
+    current = paths
+    for statement in statements:
+        continuing = tuple(path for path in current if path.termination == "next")
+        terminal = tuple(path for path in current if path.termination != "next")
+        if not continuing:
+            break
+        current = _deduplicate_paths(
+            (
+                *terminal,
+                *_flow_statement(
+                    statement,
+                    continuing,
+                    scope=scope,
+                    bindings=bindings,
+                    functions=functions,
+                    visited=visited,
+                    batch_aliases=batch_aliases,
+                ),
+            )
+        )
+    return current
+
+
+def _flow_statement(
+    statement: ast.stmt,
+    paths: tuple[_EvidencePath, ...],
+    *,
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: frozenset[str],
+    batch_aliases: frozenset[str],
+) -> tuple[_EvidencePath, ...]:
+    if isinstance(statement, ast.Return):
+        return _terminate_paths(
+            _add_expression_evidence(
+                paths,
+                statement.value,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            ),
+            "return",
+        )
+    if isinstance(statement, ast.Raise):
+        return _terminate_paths(
+            _add_expression_evidence(
+                paths,
+                statement.exc,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            ),
+            "raise",
+        )
+    if isinstance(statement, ast.Break):
+        return _terminate_paths(paths, "break")
+    if isinstance(statement, ast.Continue):
+        return _terminate_paths(paths, "continue")
+    if isinstance(statement, ast.If):
+        tested = _add_expression_evidence(
+            paths,
+            statement.test,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        truth = _static_truth(statement.test, bindings=bindings)
+        branches = (
+            (statement.body,)
+            if truth is True
+            else (statement.orelse,)
+            if truth is False
+            else (statement.body, statement.orelse)
+        )
+        return _deduplicate_paths(
+            tuple(
+                path
+                for branch in branches
+                for path in _flow_block(
+                    branch,
+                    tested,
+                    scope=scope,
+                    bindings=bindings,
+                    functions=functions,
+                    visited=visited,
+                    batch_aliases=batch_aliases,
+                )
+            )
+        )
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        entered = paths
+        for item in statement.items:
+            entered = _add_expression_evidence(
+                entered,
+                item.context_expr,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
+        if _with_swallows_exceptions(statement, bindings=bindings, scope=scope):
+            return entered
+        return _flow_block(
+            statement.body,
+            entered,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+    if isinstance(statement, ast.Try):
+        return _flow_try(
+            statement,
+            paths,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+    if isinstance(statement, (ast.For, ast.AsyncFor)):
+        iterated = _add_expression_evidence(
+            paths,
+            statement.iter,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        body_paths = _flow_block(
+            statement.body,
+            iterated,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        breaks = tuple(
+            _EvidencePath(path.evidence) for path in body_paths if path.termination == "break"
+        )
+        completes = tuple(
+            _EvidencePath(path.evidence)
+            for path in body_paths
+            if path.termination in {"next", "continue"}
+        )
+        terminal = tuple(path for path in body_paths if path.termination in {"return", "raise"})
+        else_inputs = _deduplicate_paths((*iterated, *completes))
+        else_paths = _flow_block(
+            statement.orelse,
+            else_inputs,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        return _deduplicate_paths((*terminal, *breaks, *else_paths))
+    if isinstance(statement, ast.While):
+        tested = _add_expression_evidence(
+            paths,
+            statement.test,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        truth = _static_truth(statement.test, bindings=bindings)
+        if truth is False:
+            return _flow_block(
+                statement.orelse,
+                tested,
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
+        body_paths = _flow_block(
+            statement.body,
+            tested,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        breaks = tuple(
+            _EvidencePath(path.evidence) for path in body_paths if path.termination == "break"
+        )
+        terminal = tuple(path for path in body_paths if path.termination in {"return", "raise"})
+        if truth is True:
+            return _deduplicate_paths((*terminal, *breaks))
+        completes = tuple(
+            _EvidencePath(path.evidence)
+            for path in body_paths
+            if path.termination in {"next", "continue"}
+        )
+        else_paths = _flow_block(
+            statement.orelse,
+            _deduplicate_paths((*tested, *completes)),
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        return _deduplicate_paths((*terminal, *breaks, *else_paths))
+    if isinstance(statement, ast.Match):
+        matched = _add_expression_evidence(
+            paths,
+            statement.subject,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        case_paths = tuple(
+            path
+            for case in statement.cases
+            for path in _flow_block(
+                case.body,
+                _add_expression_evidence(
+                    matched,
+                    case.guard,
+                    scope=scope,
+                    bindings=bindings,
+                    functions=functions,
+                    visited=visited,
+                    batch_aliases=batch_aliases,
+                ),
+                scope=scope,
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+                batch_aliases=batch_aliases,
+            )
+        )
+        exhaustive = any(
+            isinstance(case.pattern, ast.MatchAs)
+            and case.pattern.pattern is None
+            and case.guard is None
+            for case in statement.cases
+        )
+        return _deduplicate_paths((*case_paths, *(() if exhaustive else matched)))
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return paths
+    return _add_expression_evidence(
+        paths,
+        statement,
+        scope=scope,
+        bindings=bindings,
+        functions=functions,
+        visited=visited,
+        batch_aliases=batch_aliases,
+    )
+
+
+def _flow_try(
+    statement: ast.Try,
+    paths: tuple[_EvidencePath, ...],
+    *,
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: frozenset[str],
+    batch_aliases: frozenset[str],
+) -> tuple[_EvidencePath, ...]:
+    body_paths = _flow_block(
+        statement.body,
+        paths,
+        scope=scope,
+        bindings=bindings,
+        functions=functions,
+        visited=visited,
+        batch_aliases=batch_aliases,
+    )
+    normal_body = tuple(path for path in body_paths if path.termination == "next")
+    non_normal_body = tuple(path for path in body_paths if path.termination != "next")
+    normal_paths = _flow_block(
+        statement.orelse,
+        normal_body,
+        scope=scope,
+        bindings=bindings,
+        functions=functions,
+        visited=visited,
+        batch_aliases=batch_aliases,
+    )
+    handler_paths = tuple(
+        path
+        for handler in statement.handlers
+        for path in _flow_block(
+            handler.body,
+            paths,
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+    )
+    carried = _deduplicate_paths(
+        (
+            *normal_paths,
+            *handler_paths,
+            *(
+                path
+                for path in non_normal_body
+                if path.termination != "raise" or not statement.handlers
+            ),
+        )
+    )
+    if not statement.finalbody:
+        return carried
+    finalized: list[_EvidencePath] = []
+    for path in carried:
+        final_paths = _flow_block(
+            statement.finalbody,
+            (_EvidencePath(path.evidence),),
+            scope=scope,
+            bindings=bindings,
+            functions=functions,
+            visited=visited,
+            batch_aliases=batch_aliases,
+        )
+        finalized.extend(
+            _EvidencePath(
+                final_path.evidence,
+                path.termination if final_path.termination == "next" else final_path.termination,
+            )
+            for final_path in final_paths
+        )
+    return _deduplicate_paths(tuple(finalized))
+
+
+def _add_expression_evidence(
+    paths: tuple[_EvidencePath, ...],
+    expression: ast.AST | None,
+    *,
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: dict[str, str],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: frozenset[str],
+    batch_aliases: frozenset[str],
+) -> tuple[_EvidencePath, ...]:
+    current = paths
+    for call in _expression_calls(expression):
+        call_name = _call_evidence_name(
+            call,
+            bindings=bindings,
+            scope=scope,
+            batch_aliases=batch_aliases,
+        )
+        current = tuple(
+            _EvidencePath(path.evidence | {call_name}, path.termination) for path in current
+        )
+        for helper_name in _referenced_local_functions(
+            call,
+            function=scope,
+            functions=functions,
+        ):
+            if helper_name in visited:
+                continue
+            helper_paths = _passing_evidence_paths(
+                functions[helper_name],
+                bindings=bindings,
+                functions=functions,
+                visited=visited,
+            )
+            if not helper_paths:
+                current = ()
+                break
+            current = _deduplicate_paths(
+                tuple(
+                    _EvidencePath(path.evidence | helper_evidence, path.termination)
+                    for path in current
+                    for helper_evidence in helper_paths
+                )
+            )
+    return current
+
+
+def _expression_calls(expression: ast.AST | None) -> tuple[ast.Call, ...]:
+    if expression is None:
+        return ()
+    calls: list[ast.Call] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not expression and isinstance(
+            node,
+            (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            return
+        if isinstance(node, ast.Call):
+            calls.append(node)
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.stmt):
+                continue
+            visit(child)
+
+    visit(expression)
+    return tuple(calls)
+
+
+def _call_evidence_name(
+    call: ast.Call,
+    *,
+    bindings: dict[str, str],
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    batch_aliases: frozenset[str],
+) -> str:
+    if (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id in batch_aliases
+    ):
+        return f"alembic.op.{call.func.attr}"
+    return _qualified_call_name(call, bindings, scope=scope)
+
+
+def _batch_operation_aliases(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    bindings: dict[str, str],
+) -> frozenset[str]:
+    aliases: set[str] = set()
+    for node in ast.walk(function):
+        if not isinstance(node, (ast.With, ast.AsyncWith)):
+            continue
+        for item in node.items:
+            if (
+                isinstance(item.context_expr, ast.Call)
+                and _qualified_call_name(item.context_expr, bindings, scope=function)
+                == "alembic.op.batch_alter_table"
+                and isinstance(item.optional_vars, ast.Name)
+            ):
+                aliases.add(item.optional_vars.id)
+    return frozenset(aliases)
+
+
+def _terminate_paths(
+    paths: tuple[_EvidencePath, ...],
+    termination: _FlowTermination,
+) -> tuple[_EvidencePath, ...]:
+    return tuple(_EvidencePath(path.evidence, termination) for path in paths)
+
+
+def _deduplicate_paths(paths: tuple[_EvidencePath, ...]) -> tuple[_EvidencePath, ...]:
+    return tuple(dict.fromkeys(paths))
+
+
+def _static_truth(expression: ast.expr, *, bindings: dict[str, str]) -> bool | None:
+    if _is_statically_true(expression):
+        return True
+    if _is_statically_false(expression, bindings=bindings):
+        return False
+    return None
+
+
+def _with_swallows_exceptions(
+    statement: ast.With | ast.AsyncWith,
+    *,
+    bindings: dict[str, str],
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    swallowing_contexts = {"contextlib.suppress", "pytest.raises"}
+    return any(
+        isinstance(item.context_expr, ast.Call)
+        and _qualified_call_name(item.context_expr, bindings, scope=scope) in swallowing_contexts
+        for item in statement.items
+    )
+
+
 def _env_entrypoint_has_migration_evidence(
     entrypoint: str,
     *,
     functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
     bindings: dict[str, str],
 ) -> bool:
-    pending = [entrypoint]
-    visited: set[str] = set()
-    calls: list[tuple[ast.Call, ast.FunctionDef | ast.AsyncFunctionDef]] = []
-    while pending:
-        function_name = pending.pop()
-        if function_name in visited:
-            continue
-        visited.add(function_name)
-        function = functions[function_name]
-        function_calls = _calls_in_executable_scope(function, bindings=bindings)
-        calls.extend((call, function) for call in function_calls)
-        for call in function_calls:
-            pending.extend(
-                referenced
-                for referenced in _referenced_local_functions(
-                    call,
-                    function=function,
-                    functions=functions,
-                )
-                if referenced not in visited
-            )
-
-    qualified_calls = {
-        _qualified_call_name(call, bindings, scope=function) for call, function in calls
-    }
-    return {
-        "alembic.context.configure",
-        "alembic.context.run_migrations",
-    } <= qualified_calls
+    passing_paths = _passing_evidence_paths(
+        functions[entrypoint],
+        bindings=bindings,
+        functions=functions,
+    )
+    required = {_CONFIGURE_EVIDENCE, _RUN_MIGRATIONS_EVIDENCE}
+    return bool(passing_paths) and all(required <= path for path in passing_paths)
 
 
 def _referenced_local_functions(
@@ -439,6 +1070,104 @@ def _module_executable_calls(
         decorator_list=[],
     )
     return _calls_in_executable_scope(wrapper, bindings=bindings)
+
+
+def _module_invokes_entrypoint_at_import(
+    tree: ast.Module,
+    *,
+    entrypoints: set[str],
+    bindings: dict[str, str],
+) -> bool:
+    return any(
+        _qualified_call_name(call, bindings, scope=tree) in entrypoints
+        and _node_reachable_at_module_import(tree.body, call, bindings=bindings)
+        for call in _module_executable_calls(tree, bindings=bindings)
+    )
+
+
+def _node_reachable_at_module_import(
+    statements: list[ast.stmt],
+    target: ast.AST,
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    for statement in statements:
+        if not any(node is target for node in ast.walk(statement)):
+            if _statement_always_terminates(statement, bindings=bindings):
+                return False
+            continue
+        if isinstance(statement, ast.If):
+            if any(node is target for node in ast.walk(statement.test)):
+                return True
+            truth = _module_import_truth(statement.test, bindings=bindings)
+            branches = (
+                (statement.body,)
+                if truth is True
+                else (statement.orelse,)
+                if truth is False
+                else (statement.body, statement.orelse)
+            )
+            return any(
+                _node_reachable_at_module_import(branch, target, bindings=bindings)
+                for branch in branches
+            )
+        if isinstance(statement, (ast.With, ast.AsyncWith)):
+            return _node_reachable_at_module_import(
+                statement.body,
+                target,
+                bindings=bindings,
+            )
+        if isinstance(statement, ast.Try):
+            return any(
+                _node_reachable_at_module_import(block, target, bindings=bindings)
+                for block in (
+                    statement.body,
+                    *(handler.body for handler in statement.handlers),
+                    statement.orelse,
+                    statement.finalbody,
+                )
+            )
+        if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+            return any(
+                _node_reachable_at_module_import(block, target, bindings=bindings)
+                for block in (statement.body, statement.orelse)
+            )
+        if isinstance(statement, ast.Match):
+            return any(
+                _node_reachable_at_module_import(case.body, target, bindings=bindings)
+                for case in statement.cases
+            )
+        return True
+    return False
+
+
+def _module_import_truth(
+    expression: ast.expr,
+    *,
+    bindings: dict[str, str],
+) -> bool | None:
+    if (
+        isinstance(expression, ast.Compare)
+        and len(expression.ops) == 1
+        and len(expression.comparators) == 1
+    ):
+        left, right = expression.left, expression.comparators[0]
+        values = (left, right)
+        if any(isinstance(value, ast.Name) and value.id == "__name__" for value in values):
+            literal = next(
+                (
+                    value.value
+                    for value in values
+                    if isinstance(value, ast.Constant) and isinstance(value.value, str)
+                ),
+                None,
+            )
+            if literal == "__main__":
+                if isinstance(expression.ops[0], ast.Eq):
+                    return False
+                if isinstance(expression.ops[0], ast.NotEq):
+                    return True
+    return _static_truth(expression, bindings=bindings)
 
 
 def _executable_scope_nodes(
@@ -553,6 +1282,32 @@ def _statement_always_terminates(statement: ast.stmt, *, bindings: dict[str, str
         )
     if isinstance(statement, (ast.With, ast.AsyncWith)):
         return _block_always_terminates(statement.body, bindings=bindings)
+    if isinstance(statement, ast.Try):
+        if _block_always_terminates(statement.finalbody, bindings=bindings):
+            return True
+        handlers_terminate = all(
+            _block_always_terminates(handler.body, bindings=bindings)
+            for handler in statement.handlers
+        )
+        normal_terminates = _block_always_terminates(
+            statement.body,
+            bindings=bindings,
+        ) or (
+            bool(statement.orelse) and _block_always_terminates(statement.orelse, bindings=bindings)
+        )
+        return normal_terminates and handlers_terminate
+    if isinstance(statement, ast.Match):
+        exhaustive = any(
+            isinstance(case.pattern, ast.MatchAs)
+            and case.pattern.pattern is None
+            and case.guard is None
+            for case in statement.cases
+        )
+        return exhaustive and all(
+            _block_always_terminates(case.body, bindings=bindings) for case in statement.cases
+        )
+    if isinstance(statement, ast.While) and _is_statically_true(statement.test):
+        return not _contains_loop_break(statement.body)
     return False
 
 
@@ -566,6 +1321,26 @@ def _block_always_terminates(
     )
 
 
+def _contains_loop_break(statements: list[ast.stmt]) -> bool:
+    found = False
+
+    def visit(node: ast.AST) -> None:
+        nonlocal found
+        if found:
+            return
+        if isinstance(node, ast.Break):
+            found = True
+            return
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in statements:
+        visit(statement)
+    return found
+
+
 def _with_expects_exception(
     statement: ast.With | ast.AsyncWith,
     *,
@@ -574,7 +1349,8 @@ def _with_expects_exception(
 ) -> bool:
     return any(
         isinstance(item.context_expr, ast.Call)
-        and _qualified_call_name(item.context_expr, bindings, scope=scope) == "pytest.raises"
+        and _qualified_call_name(item.context_expr, bindings, scope=scope)
+        in {"contextlib.suppress", "pytest.raises"}
         for item in statement.items
     )
 

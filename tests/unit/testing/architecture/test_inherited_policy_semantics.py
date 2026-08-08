@@ -98,6 +98,41 @@ def test_core_rejects_package_reexported_pydantic_types(tmp_path: Path) -> None:
     assert "request.Request" in report.violations[0].message
 
 
+def test_core_rejects_neutral_reexports_and_quoted_forbidden_types(
+    tmp_path: Path,
+) -> None:
+    _write(
+        _source(tmp_path, "delivery/schemas/request.py"),
+        "from pydantic import BaseModel\n\nclass RuntimePayload(BaseModel): pass\n",
+    )
+    _write(
+        _source(tmp_path, "infrastructure/settings.py"),
+        "from pydantic_settings import BaseSettings\n\nclass RuntimeSettings(BaseSettings): pass\n",
+    )
+    _write(
+        _source(tmp_path, "contracts.py"),
+        "from demo_service.delivery.schemas.request import RuntimePayload\n"
+        "from demo_service.infrastructure.settings import RuntimeSettings\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/parser.py"),
+        "import demo_service.contracts as contracts\n\n"
+        "class Parser:\n"
+        "    payload: 'contracts.RuntimePayload'\n"
+        "    settings: 'contracts.RuntimeSettings'\n",
+    )
+
+    report = _check_only(
+        tmp_path,
+        SpecxRuleId.CORE_NO_RUNTIME_CONFIGURATION_OR_PYDANTIC,
+    )
+
+    assert len(report.violations) == 2
+    messages = "\n".join(item.message for item in report.violations)
+    assert "demo_service.contracts.RuntimePayload" in messages
+    assert "demo_service.contracts.RuntimeSettings" in messages
+
+
 def test_service_signature_reports_each_inherited_declaration_once_and_overrides(
     tmp_path: Path,
 ) -> None:

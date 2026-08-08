@@ -29,7 +29,8 @@ def test_rebound_alembic_imports_are_not_valid_evidence(tmp_path: Path) -> None:
     _write(
         tmp_path / "migrations/versions/0001.py",
         "from alembic import op\n\n"
-        "revision = '0001'\n\n"
+        "revision = '0001'\n"
+        "down_revision = None\n\n"
         "class FakeOp:\n"
         "    def execute(self, value): pass\n\n"
         "op = FakeOp()\n\n"
@@ -61,7 +62,8 @@ def test_revision_requires_upgrade_operation_evidence(tmp_path: Path) -> None:
     _write(
         tmp_path / "migrations/versions/0001.py",
         "from alembic import op\n\n"
-        "revision = '0001'\n\n"
+        "revision = '0001'\n"
+        "down_revision = None\n\n"
         "def upgrade(): pass\n"
         "def downgrade(): op.drop_table('orders')\n",
     )
@@ -89,7 +91,8 @@ def test_dead_upgrade_evidence_is_rejected(
     _write(
         tmp_path / "migrations/versions/0001.py",
         f"{prefix}from alembic import op\n\n"
-        "revision = '0001'\n\n"
+        "revision = '0001'\n"
+        "down_revision = None\n\n"
         f"def upgrade():\n    {statement}\n        op.create_table('orders')\n"
         "def downgrade(): pass\n",
     )
@@ -142,7 +145,8 @@ def _write_project(tmp_path: Path, *, command_prefix: str = "uv run alembic") ->
     _write(
         tmp_path / "migrations/versions/0001.py",
         "from alembic import op\n\n"
-        "revision = '0001'\n\n"
+        "revision = '0001'\n"
+        "down_revision = None\n\n"
         "def upgrade(): op.create_table('orders')\n"
         "def downgrade(): pass\n",
     )

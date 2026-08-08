@@ -140,6 +140,14 @@ def _annotation_is_injected(
 ) -> bool:
     if annotation is None:
         return False
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        parsed = _parse_string_annotation(annotation)
+        return parsed is not None and _annotation_is_injected(
+            parsed,
+            path=path,
+            context=context,
+            visited=visited,
+        )
     qualified = context.qualified_name(path, annotation)
     if qualified == "diwire.Injected":
         return True
@@ -171,6 +179,19 @@ def _annotation_is_injected(
         == "diwire._internal.markers.InjectedMarker"
         for element in elements[1:]
     )
+
+
+def _parse_string_annotation(annotation: ast.Constant) -> ast.expr | None:
+    value = annotation.value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = ast.parse(value, mode="eval").body
+    except SyntaxError:
+        return None
+    for node in ast.walk(parsed):
+        ast.copy_location(node, annotation)
+    return parsed
 
 
 def _project_alias_expression(

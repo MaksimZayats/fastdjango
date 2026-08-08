@@ -114,18 +114,24 @@ def _target_resolved_by_container(
     test_path: Path,
     context: ArchitectureContext,
 ) -> bool:
-    for function in (
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("test_")
-    ):
+    module_disabled = _pytestmark_disables_tests(
+        tree.body,
+        path=test_path,
+        context=context,
+    )
+    for function, owner_classes in _test_functions_with_owners(tree):
         arguments = (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)
         if (
             not any(argument.arg == "container" for argument in arguments)
             or _container_is_defaulted(function)
             or _container_is_parametrized(function)
-            or _test_is_disabled(function, path=test_path, context=context)
+            or module_disabled
+            or _test_is_disabled(
+                function,
+                owner_classes=owner_classes,
+                path=test_path,
+                context=context,
+            )
         ):
             continue
         executable_nodes = _executable_function_nodes(function)
@@ -147,7 +153,10 @@ def _target_resolved_by_container(
                 continue
             if call.func.attr == "aresolve" and id(call) not in awaited_call_ids:
                 continue
-            if _container_reassigned_before(function, call) or _resolution_exception_is_swallowed(
+            if _container_reassigned_before(
+                function,
+                call,
+            ) or _resolution_exception_is_swallowed(
                 function,
                 call,
                 path=test_path,
@@ -163,75 +172,286 @@ def _target_resolved_by_container(
     return False
 
 
+def _test_functions_with_owners(
+    tree: ast.Module,
+) -> tuple[
+    tuple[
+        ast.FunctionDef | ast.AsyncFunctionDef,
+        tuple[ast.ClassDef, ...],
+    ],
+    ...,
+]:
+    found: list[
+        tuple[
+            ast.FunctionDef | ast.AsyncFunctionDef,
+            tuple[ast.ClassDef, ...],
+        ]
+    ] = []
+
+    def collect(statements: list[ast.stmt], owners: tuple[ast.ClassDef, ...]) -> None:
+        for statement in statements:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if statement.name.startswith("test_"):
+                    found.append((statement, owners))
+                continue
+            if isinstance(statement, ast.ClassDef):
+                collect(statement.body, (*owners, statement))
+
+    collect(tree.body, ())
+    return tuple(found)
+
+
 def _node_is_reachable(statements: list[ast.stmt], target: ast.AST) -> bool:
     for statement in statements:
         if any(node is target for node in ast.walk(statement)):
-            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                return False
-            if isinstance(statement, (ast.If, ast.While)):
-                if any(node is target for node in ast.walk(statement.test)):
-                    return True
-                branches = (
-                    (statement.orelse,)
-                    if _is_statically_false(statement.test)
-                    else (statement.body,)
-                    if _is_statically_true(statement.test)
-                    else (statement.body, statement.orelse)
-                )
-                return any(_node_is_reachable(branch, target) for branch in branches)
-            if isinstance(statement, (ast.For, ast.AsyncFor)):
-                if any(node is target for node in ast.walk(statement.iter)):
-                    return True
-                return _node_is_reachable(statement.body, target) or _node_is_reachable(
-                    statement.orelse,
-                    target,
-                )
-            if isinstance(statement, (ast.With, ast.AsyncWith)):
-                if any(
-                    any(node is target for node in ast.walk(item.context_expr))
-                    for item in statement.items
-                ):
-                    return True
-                return _node_is_reachable(statement.body, target)
-            if isinstance(statement, ast.Try):
-                return any(
-                    _node_is_reachable(block, target)
-                    for block in (
-                        statement.body,
-                        *(handler.body for handler in statement.handlers),
-                        statement.orelse,
-                        statement.finalbody,
-                    )
-                )
-            if isinstance(statement, ast.Match):
-                if any(node is target for node in ast.walk(statement.subject)):
-                    return True
-                return any(_node_is_reachable(case.body, target) for case in statement.cases)
-            return True
-        if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            return _target_is_reachable_in_statement(statement, target)
+        if not _statement_can_fall_through(statement):
             return False
+    return False
+
+
+def _target_is_reachable_in_statement(statement: ast.stmt, target: ast.AST) -> bool:
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return False
+    if isinstance(statement, (ast.If, ast.While)):
+        if any(node is target for node in ast.walk(statement.test)):
+            return True
+        branches = (
+            (statement.orelse,)
+            if _is_statically_false(statement.test)
+            else (statement.body,)
+            if _is_statically_true(statement.test)
+            else (statement.body, statement.orelse)
+        )
+        return any(_node_is_reachable(branch, target) for branch in branches)
+    if isinstance(statement, (ast.For, ast.AsyncFor)):
+        if any(node is target for node in ast.walk(statement.iter)):
+            return True
+        return _node_is_reachable(statement.body, target) or _node_is_reachable(
+            statement.orelse,
+            target,
+        )
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        if any(
+            any(node is target for node in ast.walk(item.context_expr)) for item in statement.items
+        ):
+            return True
+        return _node_is_reachable(statement.body, target)
+    if isinstance(statement, ast.Try):
+        body_outcomes = _block_exit_kinds(statement.body)
+        if _node_is_reachable(statement.body, target):
+            return True
+        if "raise" in body_outcomes and any(
+            _node_is_reachable(handler.body, target) for handler in statement.handlers
+        ):
+            return True
+        if "fall" in body_outcomes and _node_is_reachable(
+            statement.orelse,
+            target,
+        ):
+            return True
+        return _node_is_reachable(statement.finalbody, target)
+    if isinstance(statement, ast.Match):
+        if any(node is target for node in ast.walk(statement.subject)):
+            return True
+        return any(_node_is_reachable(case.body, target) for case in statement.cases)
+    return True
+
+
+def _statement_can_fall_through(statement: ast.stmt) -> bool:
+    return "fall" in _statement_exit_kinds(statement)
+
+
+def _statement_exit_kinds(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, ast.Return):
+        return {"return"}
+    if isinstance(statement, ast.Raise):
+        return {"raise"}
+    if isinstance(statement, ast.Break):
+        return {"break"}
+    if isinstance(statement, ast.Continue):
+        return {"continue"}
+    if isinstance(statement, ast.If):
+        if _is_statically_false(statement.test):
+            return _block_exit_kinds(statement.orelse)
+        if _is_statically_true(statement.test):
+            return _block_exit_kinds(statement.body)
+        return _block_exit_kinds(statement.body) | _block_exit_kinds(statement.orelse)
+    if isinstance(statement, ast.While):
+        if _is_statically_false(statement.test):
+            return _block_exit_kinds(statement.orelse)
+        body_outcomes = _block_exit_kinds(statement.body)
+        outcomes = body_outcomes - {"break", "continue", "fall"}
+        if "break" in body_outcomes:
+            outcomes.add("fall")
+        if not _is_statically_true(statement.test):
+            outcomes.update(_block_exit_kinds(statement.orelse))
+        return outcomes
+    if isinstance(statement, (ast.For, ast.AsyncFor)):
+        body_outcomes = _block_exit_kinds(statement.body)
+        outcomes = body_outcomes - {"break", "continue", "fall"}
+        if "break" in body_outcomes:
+            outcomes.add("fall")
+        outcomes.update(_block_exit_kinds(statement.orelse))
+        return outcomes
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        outcomes = _block_exit_kinds(statement.body)
+        if any(
+            isinstance(node, ast.Call)
+            for item in statement.items
+            for node in ast.walk(item.context_expr)
+        ):
+            outcomes.add("raise")
+        return outcomes
+    if isinstance(statement, ast.Try):
+        body_outcomes = _block_exit_kinds(statement.body)
+        before_finally = body_outcomes - {"fall"}
+        if "fall" in body_outcomes:
+            before_finally.update(_block_exit_kinds(statement.orelse))
+        if "raise" in body_outcomes and statement.handlers:
+            before_finally.update(
+                outcome
+                for handler in statement.handlers
+                for outcome in _block_exit_kinds(handler.body)
+            )
+        final_outcomes = _block_exit_kinds(statement.finalbody)
+        outcomes = final_outcomes - {"fall"}
+        if "fall" in final_outcomes:
+            outcomes.update(before_finally)
+        return outcomes
+    if isinstance(statement, ast.Match):
+        exhaustive = any(
+            case.guard is None and _pattern_is_irrefutable(case.pattern) for case in statement.cases
+        )
+        outcomes = {outcome for case in statement.cases for outcome in _block_exit_kinds(case.body)}
+        if not exhaustive:
+            outcomes.add("fall")
+        return outcomes
+    outcomes = {"fall"}
+    if any(isinstance(node, ast.Call) for node in _statement_scope_nodes(statement)):
+        outcomes.add("raise")
+    return outcomes
+
+
+def _statement_scope_nodes(statement: ast.stmt) -> tuple[ast.AST, ...]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not statement and isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+        ):
+            return
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(statement)
+    return tuple(nodes)
+
+
+def _block_exit_kinds(statements: list[ast.stmt]) -> set[str]:
+    outcomes = {"fall"}
+    for statement in statements:
+        if "fall" not in outcomes:
+            break
+        outcomes.remove("fall")
+        outcomes.update(_statement_exit_kinds(statement))
+    return outcomes
+
+
+def _pattern_is_irrefutable(pattern: ast.pattern) -> bool:
+    if isinstance(pattern, ast.MatchAs):
+        return pattern.pattern is None or _pattern_is_irrefutable(pattern.pattern)
+    if isinstance(pattern, ast.MatchOr):
+        return any(_pattern_is_irrefutable(child) for child in pattern.patterns)
     return False
 
 
 def _test_is_disabled(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
+    owner_classes: tuple[ast.ClassDef, ...],
     path: Path,
     context: ArchitectureContext,
 ) -> bool:
-    for decorator in function.decorator_list:
-        target = decorator.func if isinstance(decorator, ast.Call) else decorator
-        qualified = context.qualified_name(path, target)
-        if qualified in {"pytest.mark.skip", "pytest.mark.xfail"}:
+    if any(
+        _marker_disables_test(decorator, path=path, context=context)
+        for decorator in function.decorator_list
+    ):
+        return True
+    return any(
+        any(
+            _marker_disables_test(decorator, path=path, context=context)
+            for decorator in owner.decorator_list
+        )
+        or _pytestmark_disables_tests(owner.body, path=path, context=context)
+        for owner in owner_classes
+    )
+
+
+def _pytestmark_disables_tests(
+    statements: list[ast.stmt],
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    return any(
+        _marker_disables_test(marker, path=path, context=context)
+        for statement in statements
+        for marker in _pytestmark_expressions(statement)
+    )
+
+
+def _pytestmark_expressions(statement: ast.stmt) -> tuple[ast.expr, ...]:
+    value: ast.expr | None = None
+    if (
+        isinstance(statement, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "pytestmark"
+            for target in statement.targets
+        )
+    ) or (
+        isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+        and statement.target.id == "pytestmark"
+    ):
+        value = statement.value
+    if value is None:
+        return ()
+    if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+        return tuple(value.elts)
+    return (value,)
+
+
+def _marker_disables_test(
+    marker: ast.expr,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    target = marker.func if isinstance(marker, ast.Call) else marker
+    qualified = context.qualified_name(path, target)
+    if qualified == "pytest.mark.skip":
+        return True
+    if qualified == "pytest.mark.xfail":
+        if not isinstance(marker, ast.Call):
             return True
-        if (
-            qualified == "pytest.mark.skipif"
-            and isinstance(decorator, ast.Call)
-            and decorator.args
-            and _is_statically_true(decorator.args[0])
-        ):
-            return True
-    return False
+        condition = _marker_condition(marker)
+        return condition is None or _is_statically_true(condition)
+    if qualified != "pytest.mark.skipif" or not isinstance(marker, ast.Call):
+        return False
+    condition = _marker_condition(marker)
+    return condition is not None and _is_statically_true(condition)
+
+
+def _marker_condition(marker: ast.Call) -> ast.expr | None:
+    if marker.args:
+        return marker.args[0]
+    return next(
+        (keyword.value for keyword in marker.keywords if keyword.arg == "condition"),
+        None,
+    )
 
 
 def _has_native_container_fixture(
@@ -501,12 +721,37 @@ def _container_reassigned_before(
     return False
 
 
-def _call_mutates_container(call: ast.Call) -> bool:
-    if not call.args or not isinstance(call.args[0], ast.Name) or call.args[0].id != "container":
+def _call_mutates_container(
+    call: ast.Call,
+) -> bool:
+    target = call.args[0] if call.args else _call_keyword(call, "target")
+    if not isinstance(target, ast.Name) or target.id != "container":
         return False
     if isinstance(call.func, ast.Name) and call.func.id == "setattr":
         return True
     return isinstance(call.func, ast.Attribute) and call.func.attr == "setattr"
+
+
+def _call_patches_container_resolver(
+    call: ast.Call,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    target = call.args[0] if call.args else _call_keyword(call, "target")
+    if not isinstance(target, ast.Name) or target.id != "container":
+        return False
+    attribute = call.args[1] if len(call.args) >= 2 else _call_keyword(call, "attribute")
+    if not (isinstance(attribute, ast.Constant) and attribute.value in {"resolve", "aresolve"}):
+        return False
+    qualified = context.qualified_name(path, call.func)
+    return qualified == "unittest.mock.patch.object" or ast.unparse(call.func).endswith(
+        ".patch.object"
+    )
+
+
+def _call_keyword(call: ast.Call, name: str) -> ast.expr | None:
+    return next((keyword.value for keyword in call.keywords if keyword.arg == name), None)
 
 
 def _resolution_exception_is_swallowed(
@@ -519,7 +764,7 @@ def _resolution_exception_is_swallowed(
     for node in ast.walk(function):
         if (
             isinstance(node, ast.Try)
-            and node.handlers
+            and any(not _handler_guarantees_raise(handler) for handler in node.handlers)
             and any(
                 any(descendant is call for descendant in ast.walk(statement))
                 for statement in node.body
@@ -530,7 +775,15 @@ def _resolution_exception_is_swallowed(
             isinstance(node, (ast.With, ast.AsyncWith))
             and any(
                 isinstance(item.context_expr, ast.Call)
-                and context.qualified_name(path, item.context_expr.func) == "pytest.raises"
+                and (
+                    context.qualified_name(path, item.context_expr.func)
+                    in {"contextlib.suppress", "pytest.raises"}
+                    or _call_patches_container_resolver(
+                        item.context_expr,
+                        path=path,
+                        context=context,
+                    )
+                )
                 for item in node.items
             )
             and any(
@@ -540,6 +793,14 @@ def _resolution_exception_is_swallowed(
         ):
             return True
     return False
+
+
+def _handler_guarantees_raise(handler: ast.ExceptHandler) -> bool:
+    return _block_guarantees_raise(handler.body)
+
+
+def _block_guarantees_raise(statements: list[ast.stmt]) -> bool:
+    return _block_exit_kinds(statements) == {"raise"}
 
 
 def _executable_function_nodes(
@@ -595,4 +856,4 @@ def _is_statically_false(expression: ast.expr) -> bool:
 
 
 def _is_statically_true(expression: ast.expr) -> bool:
-    return isinstance(expression, ast.Constant) and expression.value is True
+    return isinstance(expression, ast.Constant) and bool(expression.value)
