@@ -152,6 +152,31 @@ def test_class_local_container_fixture_shadows_native_fixture(
     assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
 
 
+def test_class_local_container_fixture_does_not_shadow_native_module_test(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        "    container.resolve(OrderService)\n\n"
+        "class TestUnrelated:\n"
+        "    @pytest.fixture\n"
+        "    def container(self):\n"
+        "        return object()\n\n"
+        "    def test_something_else(self, container):\n"
+        "        assert container is not None\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
 def test_container_proof_rejects_method_mutation_and_swallowed_resolution(
     tmp_path: Path,
 ) -> None:
@@ -338,6 +363,55 @@ def test_runtime_pytest_termination_short_circuits_its_expression(
     )
 
     assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+def test_exception_handler_does_not_catch_pytest_outcome_termination(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        "    try:\n"
+        "        pytest.skip('disabled')\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    container.resolve(OrderService)\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+@pytest.mark.parametrize("handler", ["BaseException", None])
+def test_compatible_handler_catches_pytest_outcome_termination(
+    tmp_path: Path,
+    handler: str | None,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    except_clause = f"except {handler}:" if handler is not None else "except:"
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        "    try:\n"
+        "        pytest.xfail('disabled')\n"
+        f"    {except_clause}\n"
+        "        pass\n"
+        "    container.resolve(OrderService)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
 
 
 @pytest.mark.parametrize(

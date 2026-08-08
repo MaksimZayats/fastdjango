@@ -4,7 +4,7 @@ import ast
 import builtins
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
@@ -365,6 +365,10 @@ def _parameter_default_call_names(
 ) -> frozenset[str]:
     chain = attribute_chain(call.func)
     if not chain:
+        return frozenset()
+    reaching_names = context.qualified_names(path, call.func)
+    local_parameter_name = ".".join(("<local>", *chain))
+    if local_parameter_name not in reaching_names:
         return frozenset()
     positional = (*function.args.posonlyargs, *function.args.args)
     defaulted_positionals = (
@@ -731,6 +735,7 @@ def _direct_nested_functions(
 
 
 MethodBinding = Literal["instance", "class", "static"]
+DescriptorComponent = Literal["getter", "setter", "deleter"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -738,6 +743,7 @@ class ClassMethodDeclaration:
     path: Path
     function: ast.FunctionDef | ast.AsyncFunctionDef
     binding: MethodBinding
+    descriptor_component: DescriptorComponent | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -800,14 +806,32 @@ def _class_statement_method_groups(
 ) -> dict[str, ClassMethodGroup]:
     current = dict(state)
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        descriptor_component, updates_existing_descriptor = _function_descriptor_component(
+            statement,
+            path=path,
+            context=context,
+        )
         declaration = ClassMethodDeclaration(
             path=path,
             function=statement,
             binding=_function_binding(statement, path=path, context=context),
+            descriptor_component=descriptor_component,
         )
         existing = current.get(statement.name)
         existing_declarations = existing.declarations if existing is not None else ()
-        if _function_is_overload(statement, path=path, context=context) or (
+        if descriptor_component is not None:
+            descriptor_declarations = (
+                tuple(
+                    candidate
+                    for candidate in existing_declarations
+                    if candidate.descriptor_component is not None
+                    and candidate.descriptor_component != descriptor_component
+                )
+                if updates_existing_descriptor
+                else ()
+            )
+            declarations = (*descriptor_declarations, declaration)
+        elif _function_is_overload(statement, path=path, context=context) or (
             existing_declarations
             and all(
                 _function_is_overload(
@@ -1079,6 +1103,30 @@ def _function_binding(
     return "instance"
 
 
+def _function_descriptor_component(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[DescriptorComponent | None, bool]:
+    for decorator in function.decorator_list:
+        expression = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if context.qualified_names(path, expression) & {
+            "abc.abstractproperty",
+            "builtins.property",
+            "property",
+        }:
+            return "getter", False
+        chain = attribute_chain(expression)
+        if (
+            len(chain) == 2
+            and chain[0] == function.name
+            and chain[1] in {"getter", "setter", "deleter"}
+        ):
+            return cast(DescriptorComponent, chain[1]), True
+    return None, False
+
+
 def _project_function_definitions(
     context: ArchitectureContext,
 ) -> dict[str, tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...]]:
@@ -1191,10 +1239,36 @@ def _annotation_is_callable(
     context: ArchitectureContext,
     visited: set[str],
 ) -> bool:
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            parsed = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return False
+        return _annotation_is_callable(
+            parsed,
+            path=path,
+            context=context,
+            visited=visited,
+        )
     root = annotation.value if isinstance(annotation, ast.Subscript) else annotation
     qualified = context.qualified_name(path, root)
     if qualified in {"collections.abc.Callable", "typing.Callable"}:
         return True
+    if isinstance(annotation, ast.Subscript) and qualified in {
+        "typing.Annotated",
+        "typing_extensions.Annotated",
+    }:
+        annotated_type = (
+            annotation.slice.elts[0]
+            if isinstance(annotation.slice, ast.Tuple) and annotation.slice.elts
+            else annotation.slice
+        )
+        return _annotation_is_callable(
+            annotated_type,
+            path=path,
+            context=context,
+            visited=visited,
+        )
     if qualified in visited:
         return False
     alias = _project_alias_expression(qualified, path=path, context=context)

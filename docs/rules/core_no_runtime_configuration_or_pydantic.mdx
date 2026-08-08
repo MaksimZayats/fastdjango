@@ -36,8 +36,10 @@ class BillingService(BaseEffectService):
 Checks every Python file beneath `core/`, including `__init__.py`, for direct Pydantic/settings
 imports and runtime references to project types with exact Pydantic `BaseModel` or `RootModel`,
 Pydantic dataclass decoration, Pydantic Settings `BaseSettings`, or specx runtime-settings ancestry.
-Module-qualified calls, quoted forward annotations, neutral project re-exports, and construction count;
-unrelated project classes that merely share a base name or use the standard-library dataclass decorator
-do not. A pure project module is not rejected merely because its qualified name contains `settings`;
-exact forbidden types and runtime-settings objects remain rejected. Behavior-method environment calls belong
+Module-qualified calls, quoted forward annotations, neutral project re-exports, and construction count.
+Project aliases remain forbidden when union, generic, `Annotated`, quoted, or recursively re-exported
+payloads contain one of those types. Pure domain aliases and unrelated string values pass. Unrelated
+project classes that merely share a base name or use the standard-library dataclass decorator do not.
+A pure project module is not rejected merely because its qualified name contains `settings`; exact
+forbidden types and runtime-settings objects remain rejected. Behavior-method environment calls belong
 to `core.behavior-no-ambient-runtime-access` so one source location has one diagnostic owner.

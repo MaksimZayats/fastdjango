@@ -62,6 +62,8 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
                         if group.always_bound:
                             seen_methods.add(method_name)
                         for method_declaration in group.declarations:
+                            if method_declaration.descriptor_component is not None:
+                                continue
                             declaration_key = (
                                 method_declaration.path,
                                 id(method_declaration.function),

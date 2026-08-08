@@ -29,6 +29,7 @@ _DRIFT_EVIDENCE = frozenset(
         "alembic.command.check",
     }
 )
+_PYTEST_OUTCOME_CALLS = frozenset({"pytest.skip", "pytest.xfail"})
 _REVISION_EFFECT_METHODS = frozenset(
     {
         "add_column",
@@ -51,7 +52,14 @@ _REVISION_EFFECT_METHODS = frozenset(
         "rename_table",
     }
 )
-_FlowTermination = Literal["next", "return", "raise", "break", "continue"]
+_FlowTermination = Literal[
+    "next",
+    "return",
+    "raise",
+    "pytest-outcome",
+    "break",
+    "continue",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -801,9 +809,17 @@ def _flow_try(
         visited=visited,
         batch_aliases=batch_aliases,
     )
+    only_pytest_outcomes = bool(body_paths) and all(
+        path.termination == "pytest-outcome" for path in body_paths
+    )
+    eligible_handlers = (
+        tuple(handler for handler in statement.handlers if _handler_catches_pytest_outcome(handler))
+        if only_pytest_outcomes
+        else tuple(statement.handlers)
+    )
     handler_paths = tuple(
         path
-        for handler in statement.handlers
+        for handler in eligible_handlers
         for path in _flow_block(
             handler.body,
             paths,
@@ -1024,6 +1040,8 @@ def _add_call_evidence(
         scope=scope,
         batch_aliases=batch_aliases,
     )
+    if call_name in _PYTEST_OUTCOME_CALLS:
+        return _terminate_paths(paths, "pytest-outcome")
     current = tuple(_EvidencePath(path.evidence | {call_name}, path.termination) for path in paths)
     for helper_name in _referenced_local_functions(
         call,
@@ -1095,6 +1113,16 @@ def _terminate_paths(
 
 def _deduplicate_paths(paths: tuple[_EvidencePath, ...]) -> tuple[_EvidencePath, ...]:
     return tuple(dict.fromkeys(paths))
+
+
+def _handler_catches_pytest_outcome(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return True
+    exception_types = handler.type.elts if isinstance(handler.type, ast.Tuple) else (handler.type,)
+    return any(
+        isinstance(exception_type, ast.Name) and exception_type.id == "BaseException"
+        for exception_type in exception_types
+    )
 
 
 def _static_truth(expression: ast.expr, *, bindings: dict[str, str]) -> bool | None:

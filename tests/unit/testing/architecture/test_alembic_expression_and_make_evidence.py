@@ -133,6 +133,107 @@ def test_required_artifacts_accept_statically_guaranteed_expression_calls(
     assert _check(tmp_path).violations == ()
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    pytest.skip('disabled')\n",
+        "    pytest.xfail('disabled')\n",
+        "    stop_test('disabled')\n",
+        "    pytest.skip('disabled') or command.upgrade(None, 'head')\n",
+    ],
+)
+def test_runtime_pytest_outcomes_terminate_migration_evidence(
+    tmp_path: Path,
+    body: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n"
+        "from pytest import skip as stop_test\n\n"
+        "def test_migrations():\n"
+        f"{body}"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _invalid_file(
+        _check(tmp_path),
+        "tests/integration/migrations/test_migrations.py",
+    )
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "    True or pytest.skip('disabled')\n",
+        "    False and pytest.xfail('disabled')\n",
+        "    pytest.skip('disabled') if False else None\n",
+    ],
+)
+def test_short_circuited_pytest_outcomes_do_not_terminate_migration_evidence(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "def test_migrations():\n"
+        f"{prefix}"
+        "    command.upgrade(None, 'head')\n"
+        "    command.check(None)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
+def test_exception_handler_does_not_catch_pytest_outcome_for_migration_evidence(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "def test_migrations():\n"
+        "    try:\n"
+        "        pytest.skip('disabled')\n"
+        "    except Exception:\n"
+        "        command.upgrade(None, 'head')\n"
+        "        command.check(None)\n",
+    )
+
+    assert _invalid_file(
+        _check(tmp_path),
+        "tests/integration/migrations/test_migrations.py",
+    )
+
+
+@pytest.mark.parametrize("handler", ["BaseException", None])
+def test_compatible_handler_catches_pytest_outcome_for_migration_evidence(
+    tmp_path: Path,
+    handler: str | None,
+) -> None:
+    _write_project(tmp_path)
+    except_clause = f"except {handler}:" if handler is not None else "except:"
+    _write(
+        tmp_path / "tests/integration/migrations/test_migrations.py",
+        "from alembic import command\n"
+        "import pytest\n\n"
+        "def test_migrations():\n"
+        "    try:\n"
+        "        pytest.xfail('disabled')\n"
+        f"    {except_clause}\n"
+        "        command.upgrade(None, 'head')\n"
+        "        command.check(None)\n",
+    )
+
+    assert _check(tmp_path).violations == ()
+
+
 @pytest.mark.parametrize("prefix", ["-", "@-", "-@", "+-"])
 def test_make_recipe_rejects_ignore_errors_prefix(tmp_path: Path, prefix: str) -> None:
     _write_project(tmp_path)

@@ -73,11 +73,6 @@ class TestsCoreBehaviorResolvesFromContainerRule(ArchitectureRuleBase):
                 if (
                     test_tree is None
                     or not native_container_available
-                    or _defines_container_fixture(
-                        test_tree,
-                        path=test_path,
-                        context=context,
-                    )
                     or _has_shadowing_container_fixture(
                         context,
                         test_path=test_path,
@@ -119,6 +114,11 @@ def _target_resolved_by_container(
         path=test_path,
         context=context,
     )
+    module_container_shadowed = _defines_container_fixture(
+        tree,
+        path=test_path,
+        context=context,
+    )
     for function, owner_classes in _test_functions_with_owners(tree):
         arguments = (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)
         if (
@@ -126,6 +126,12 @@ def _target_resolved_by_container(
             or _container_is_defaulted(function)
             or _container_is_parametrized(function)
             or module_disabled
+            or module_container_shadowed
+            or _owner_defines_container_fixture(
+                owner_classes,
+                path=test_path,
+                context=context,
+            )
             or _test_is_disabled(
                 function,
                 owner_classes=owner_classes,
@@ -322,13 +328,22 @@ def _target_is_reachable_in_statement(
             terminal_call_ids=terminal_call_ids,
         ):
             return True
-        if "raise" in body_outcomes and any(
+        reachable_handlers = (
+            statement.handlers
+            if "raise" in body_outcomes
+            else [
+                handler
+                for handler in statement.handlers
+                if "pytest-outcome" in body_outcomes and _handler_catches_pytest_outcome(handler)
+            ]
+        )
+        if any(
             _node_is_reachable(
                 handler.body,
                 target,
                 terminal_call_ids=terminal_call_ids,
             )
-            for handler in statement.handlers
+            for handler in reachable_handlers
         ):
             return True
         if "fall" in body_outcomes and _node_is_reachable(
@@ -468,7 +483,7 @@ def _statement_exit_kinds(
             statement.test,
             terminal_call_ids=terminal_call_ids,
         ):
-            return {"raise"}
+            return {"pytest-outcome"}
         if _is_statically_false(statement.test):
             return _block_exit_kinds(
                 statement.orelse,
@@ -491,7 +506,7 @@ def _statement_exit_kinds(
             statement.test,
             terminal_call_ids=terminal_call_ids,
         ):
-            return {"raise"}
+            return {"pytest-outcome"}
         if _is_statically_false(statement.test):
             return _block_exit_kinds(
                 statement.orelse,
@@ -517,7 +532,7 @@ def _statement_exit_kinds(
             statement.iter,
             terminal_call_ids=terminal_call_ids,
         ):
-            return {"raise"}
+            return {"pytest-outcome"}
         body_outcomes = _block_exit_kinds(
             statement.body,
             terminal_call_ids=terminal_call_ids,
@@ -540,7 +555,7 @@ def _statement_exit_kinds(
             )
             for item in statement.items
         ):
-            return {"raise"}
+            return {"pytest-outcome"}
         outcomes = _block_exit_kinds(
             statement.body,
             terminal_call_ids=terminal_call_ids,
@@ -574,6 +589,16 @@ def _statement_exit_kinds(
                     terminal_call_ids=terminal_call_ids,
                 )
             )
+        if "pytest-outcome" in body_outcomes:
+            before_finally.update(
+                outcome
+                for handler in statement.handlers
+                if _handler_catches_pytest_outcome(handler)
+                for outcome in _block_exit_kinds(
+                    handler.body,
+                    terminal_call_ids=terminal_call_ids,
+                )
+            )
         final_outcomes = _block_exit_kinds(
             statement.finalbody,
             terminal_call_ids=terminal_call_ids,
@@ -587,7 +612,7 @@ def _statement_exit_kinds(
             statement.subject,
             terminal_call_ids=terminal_call_ids,
         ):
-            return {"raise"}
+            return {"pytest-outcome"}
         exhaustive = any(
             case.guard is None and _pattern_is_irrefutable(case.pattern) for case in statement.cases
         )
@@ -603,7 +628,7 @@ def _statement_exit_kinds(
             outcomes.add("fall")
         return outcomes
     if _expression_guarantees_terminal_call(statement, terminal_call_ids=terminal_call_ids):
-        return {"raise"}
+        return {"pytest-outcome"}
     outcomes = {"fall"}
     if any(isinstance(node, ast.Call) for node in _statement_scope_nodes(statement)):
         outcomes.add("raise")
@@ -843,20 +868,33 @@ def _defines_container_fixture(
 ) -> bool:
     return any(
         _fixture_exposed_name(function, path=path, context=context) == "container"
-        for function in _fixture_functions(tree.body)
+        for function in tree.body
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
     )
 
 
-def _fixture_functions(
-    statements: list[ast.stmt],
-) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
-    functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-    for statement in statements:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            functions.append(statement)
-        elif isinstance(statement, ast.ClassDef):
-            functions.extend(_fixture_functions(statement.body))
-    return tuple(functions)
+def _owner_defines_container_fixture(
+    owners: tuple[ast.ClassDef, ...],
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    return any(
+        _fixture_exposed_name(function, path=path, context=context) == "container"
+        for owner in owners
+        for function in owner.body
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+
+
+def _handler_catches_pytest_outcome(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return True
+    exception_types = handler.type.elts if isinstance(handler.type, ast.Tuple) else (handler.type,)
+    return any(
+        isinstance(exception_type, ast.Name) and exception_type.id == "BaseException"
+        for exception_type in exception_types
+    )
 
 
 def _fixture_exposed_name(
