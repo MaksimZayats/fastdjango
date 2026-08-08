@@ -37,5 +37,6 @@ fixture from `tests/unit/conftest.py`. Every reachable return or yield from that
 project `get_container()` directly. Local or nearer fixtures, including
 `@pytest.fixture(name="container")`, and parameter reassignment invalidate the proof. Every exact
 path-qualified concrete target needs a call in the executable test body; dead branches, nested scopes,
-parametrized/defaulted shadows, and un-awaited `aresolve` calls do not count. Classes that retain
-inherited abstract methods are not resolution targets.
+parametrized/defaulted shadows, skipped tests, swallowed failures, mutated resolve methods, and
+un-awaited `aresolve` calls do not count. Classes that retain inherited abstract methods are not
+resolution targets.

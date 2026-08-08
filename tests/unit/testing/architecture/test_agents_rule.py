@@ -186,6 +186,23 @@ def test_fastapi_agents_rule_is_opt_in(tmp_path: Path) -> None:
     assert "FastAPI entrypoint" in selected_report.violations[0].message
 
 
+def test_agents_rule_accepts_shared_multi_target_make_rules(tmp_path: Path) -> None:
+    _write_minimal_project_guidance(tmp_path)
+    _write(tmp_path / "Makefile", "check lint test:\n\t@true\n")
+
+    report = check_specx_architecture(
+        SpecxArchitectureConfig(
+            project_root=tmp_path,
+            package_name="demo_service",
+            disabled_rules=_disable_all_except(
+                SpecxRuleId.ROOT_AGENTS_MD_DOCUMENTS_PROJECT_COMMANDS
+            ),
+        )
+    )
+
+    assert report.violations == ()
+
+
 def _write_minimal_project_guidance(project_root: Path) -> None:
     _write(project_root / "src" / "demo_service" / "__init__.py", "")
     _write(

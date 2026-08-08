@@ -40,4 +40,5 @@ and client effect APIs through conservative branch-aware aliases, including envi
 locale, timezone, network, and filesystem calls, ambient values such as `sys.argv`, and typed or
 derived `pathlib.Path` values. Local-time conversions such as no-timezone `fromtimestamp()` and
 `astimezone()` on typed datetime values are ambient; conversions with an explicit timezone remain
-deterministic. Project-specific wrappers and fully dynamic dispatch still require review.
+deterministic. Typed Path and datetime provenance follows local aliases, and effective methods follow
+Python C3 inheritance. Project-specific wrappers and fully dynamic dispatch still require review.

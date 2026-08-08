@@ -4,9 +4,9 @@ import ast
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_declares_sqlalchemy_mapping,
     class_definition_base_index,
     class_has_foundation_base_at,
+    class_has_sqlalchemy_mapping_at,
     class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
@@ -40,7 +40,11 @@ class SQLAlchemyModelsLiveUnderScopeInfrastructureRule(ArchitectureRuleBase):
                         source_path=path,
                         context=context,
                     )
-                    and not class_declares_sqlalchemy_mapping(node)
+                    and not class_has_sqlalchemy_mapping_at(
+                        node,
+                        source_path=path,
+                        context=context,
+                    )
                 ):
                     continue
                 if not correctly_placed and class_has_foundation_base_at(

@@ -8,9 +8,9 @@ from pathlib import Path
 
 from specx.testing.architecture.context import (
     ArchitectureContext,
-    class_declares_sqlalchemy_mapping,
     class_definition_base_index,
     class_has_foundation_base_at,
+    class_has_sqlalchemy_mapping_at,
     class_is_statically_abstract_at,
 )
 from specx.testing.architecture.models import SpecxArchitectureViolation
@@ -89,7 +89,11 @@ def _has_concrete_model(context: ArchitectureContext) -> bool:
                     source_path=path,
                     context=context,
                 )
-                or class_declares_sqlalchemy_mapping(node)
+                or class_has_sqlalchemy_mapping_at(
+                    node,
+                    source_path=path,
+                    context=context,
+                )
             )
             and class_has_foundation_base_at(
                 node,
@@ -138,18 +142,19 @@ def _has_required_markers(name: str, text: str) -> bool:
         return False
     if name == "migrations/env.py":
         bindings = _import_bindings(tree)
-        valid_entrypoints = {
-            node.name
+        functions = {
+            node.name: node
             for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name in {"run_migrations_offline", "run_migrations_online"}
-            and any(
-                _qualified_call_name(call, bindings, scope=node) == "alembic.context.configure"
-                for call in _calls_in_executable_scope(node, bindings=bindings)
-            )
-            and any(
-                _qualified_call_name(call, bindings, scope=node) == "alembic.context.run_migrations"
-                for call in _calls_in_executable_scope(node, bindings=bindings)
+        }
+        valid_entrypoints = {
+            function_name
+            for function_name in {"run_migrations_offline", "run_migrations_online"}
+            if function_name in functions
+            and _env_entrypoint_has_migration_evidence(
+                function_name,
+                functions=functions,
+                bindings=bindings,
             )
         }
         return bool(valid_entrypoints) and any(
@@ -226,7 +231,13 @@ def _test_function_has_migration_evidence(
     *,
     bindings: dict[str, str],
 ) -> bool:
-    calls = _calls_in_executable_scope(function, bindings=bindings)
+    if _test_is_unconditionally_skipped_or_xfailed(function, bindings=bindings):
+        return False
+    calls = _calls_in_executable_scope(
+        function,
+        bindings=bindings,
+        exclude_swallowing=True,
+    )
     return any(
         _qualified_call_name(call, bindings, scope=function) == "alembic.command.upgrade"
         for call in calls
@@ -241,16 +252,173 @@ def _test_function_has_migration_evidence(
     )
 
 
+def _test_is_unconditionally_skipped_or_xfailed(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    for decorator in function.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        qualified = _qualified_expression_name(target, bindings)
+        if qualified == "pytest.mark.skip":
+            return True
+        if qualified == "pytest.mark.xfail":
+            if not isinstance(decorator, ast.Call):
+                return True
+            condition = _marker_condition(decorator)
+            return condition is None or _is_statically_true(condition)
+        if (
+            qualified == "pytest.mark.skipif"
+            and isinstance(decorator, ast.Call)
+            and (condition := _marker_condition(decorator)) is not None
+            and _is_statically_true(condition)
+        ):
+            return True
+    return False
+
+
+def _marker_condition(decorator: ast.Call) -> ast.expr | None:
+    if decorator.args:
+        return decorator.args[0]
+    return next(
+        (keyword.value for keyword in decorator.keywords if keyword.arg == "condition"),
+        None,
+    )
+
+
+def _qualified_expression_name(expression: ast.expr, bindings: dict[str, str]) -> str:
+    parts: list[str] = []
+    current = expression
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return ast.unparse(expression)
+    return ".".join((bindings.get(current.id, current.id), *reversed(parts)))
+
+
 def _calls_in_executable_scope(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
     bindings: dict[str, str] | None = None,
+    exclude_swallowing: bool = False,
 ) -> tuple[ast.Call, ...]:
     return tuple(
         node
-        for node in _executable_scope_nodes(function, bindings=bindings or {})
+        for node in _executable_scope_nodes(
+            function,
+            bindings=bindings or {},
+            exclude_swallowing=exclude_swallowing,
+        )
         if isinstance(node, ast.Call)
     )
+
+
+def _env_entrypoint_has_migration_evidence(
+    entrypoint: str,
+    *,
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    bindings: dict[str, str],
+) -> bool:
+    pending = [entrypoint]
+    visited: set[str] = set()
+    calls: list[tuple[ast.Call, ast.FunctionDef | ast.AsyncFunctionDef]] = []
+    while pending:
+        function_name = pending.pop()
+        if function_name in visited:
+            continue
+        visited.add(function_name)
+        function = functions[function_name]
+        function_calls = _calls_in_executable_scope(function, bindings=bindings)
+        calls.extend((call, function) for call in function_calls)
+        for call in function_calls:
+            pending.extend(
+                referenced
+                for referenced in _referenced_local_functions(
+                    call,
+                    function=function,
+                    functions=functions,
+                )
+                if referenced not in visited
+            )
+
+    qualified_calls = {
+        _qualified_call_name(call, bindings, scope=function) for call, function in calls
+    }
+    return {
+        "alembic.context.configure",
+        "alembic.context.run_migrations",
+    } <= qualified_calls
+
+
+def _referenced_local_functions(
+    call: ast.Call,
+    *,
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> set[str]:
+    references: set[str] = set()
+    if (
+        isinstance(call.func, ast.Name)
+        and call.func.id in functions
+        and not _function_binds_name(function, call.func.id)
+    ):
+        references.add(call.func.id)
+    if isinstance(call.func, ast.Attribute) and call.func.attr == "run_sync":
+        for expression in (*call.args, *(keyword.value for keyword in call.keywords)):
+            references.update(
+                node.id
+                for node in ast.walk(expression)
+                if isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id in functions
+                and not _function_binds_name(function, node.id)
+            )
+    return references
+
+
+def _function_binds_name(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    name: str,
+) -> bool:
+    arguments = (
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    )
+    if any(argument.arg == name for argument in arguments):
+        return True
+    if function.args.vararg is not None and function.args.vararg.arg == name:
+        return True
+    if function.args.kwarg is not None and function.args.kwarg.arg == name:
+        return True
+
+    bound = False
+
+    def visit(node: ast.AST) -> None:
+        nonlocal bound
+        if bound:
+            return
+        if node is not function and isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+        ):
+            bound = node.name == name
+            return
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == name:
+            bound = True
+            return
+        if isinstance(node, ast.Import):
+            bound = any((alias.asname or alias.name.split(".")[0]) == name for alias in node.names)
+            return
+        if isinstance(node, ast.ImportFrom):
+            bound = any((alias.asname or alias.name) == name for alias in node.names)
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(function)
+    return bound
 
 
 def _module_executable_calls(
@@ -277,8 +445,15 @@ def _executable_scope_nodes(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
     bindings: dict[str, str],
+    exclude_swallowing: bool = False,
 ) -> tuple[ast.AST, ...]:
     nodes: list[ast.AST] = []
+
+    def visit_block(statements: list[ast.stmt]) -> None:
+        for statement in statements:
+            visit(statement)
+            if _statement_always_terminates(statement, bindings=bindings):
+                break
 
     def visit(node: ast.AST) -> None:
         if node is not function and isinstance(
@@ -296,23 +471,133 @@ def _executable_scope_nodes(
         ):
             return
         nodes.append(node)
-        if isinstance(node, ast.If) and _is_statically_false(node.test, bindings=bindings):
-            for statement in node.orelse:
-                visit(statement)
+        if node is function:
+            visit_block(function.body)
             return
-        if isinstance(node, ast.If) and _is_statically_true(node.test):
-            for statement in node.body:
-                visit(statement)
+        if isinstance(node, ast.If):
+            visit(node.test)
+            if _is_statically_false(node.test, bindings=bindings):
+                visit_block(node.orelse)
+            elif _is_statically_true(node.test):
+                visit_block(node.body)
+            else:
+                visit_block(node.body)
+                visit_block(node.orelse)
             return
-        if isinstance(node, ast.While) and _is_statically_false(node.test, bindings=bindings):
-            for statement in node.orelse:
-                visit(statement)
+        if isinstance(node, ast.While):
+            visit(node.test)
+            if _is_statically_false(node.test, bindings=bindings):
+                visit_block(node.orelse)
+            else:
+                visit_block(node.body)
+                visit_block(node.orelse)
+            return
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            visit(node.target)
+            visit(node.iter)
+            visit_block(node.body)
+            visit_block(node.orelse)
+            return
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                visit(item.context_expr)
+                if item.optional_vars is not None:
+                    visit(item.optional_vars)
+            if not (
+                exclude_swallowing
+                and _with_expects_exception(node, bindings=bindings, scope=function)
+            ):
+                visit_block(node.body)
+            return
+        if isinstance(node, ast.Try):
+            if not (exclude_swallowing and _try_swallows_exceptions(node)):
+                visit_block(node.body)
+                for handler in node.handlers:
+                    if handler.type is not None:
+                        visit(handler.type)
+                    visit_block(handler.body)
+            visit_block(node.orelse)
+            visit_block(node.finalbody)
+            return
+        if isinstance(node, ast.Match):
+            visit(node.subject)
+            for case in node.cases:
+                if case.guard is not None:
+                    visit(case.guard)
+                visit_block(case.body)
             return
         for descendant in ast.iter_child_nodes(node):
+            if isinstance(descendant, ast.stmt):
+                continue
             visit(descendant)
 
     visit(function)
     return tuple(nodes)
+
+
+def _statement_always_terminates(statement: ast.stmt, *, bindings: dict[str, str]) -> bool:
+    if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+        return True
+    if isinstance(statement, ast.If):
+        if _is_statically_true(statement.test):
+            return _block_always_terminates(statement.body, bindings=bindings)
+        if _is_statically_false(statement.test, bindings=bindings):
+            return _block_always_terminates(statement.orelse, bindings=bindings)
+        return (
+            bool(statement.orelse)
+            and _block_always_terminates(
+                statement.body,
+                bindings=bindings,
+            )
+            and _block_always_terminates(statement.orelse, bindings=bindings)
+        )
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return _block_always_terminates(statement.body, bindings=bindings)
+    return False
+
+
+def _block_always_terminates(
+    statements: list[ast.stmt],
+    *,
+    bindings: dict[str, str],
+) -> bool:
+    return any(
+        _statement_always_terminates(statement, bindings=bindings) for statement in statements
+    )
+
+
+def _with_expects_exception(
+    statement: ast.With | ast.AsyncWith,
+    *,
+    bindings: dict[str, str],
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    return any(
+        isinstance(item.context_expr, ast.Call)
+        and _qualified_call_name(item.context_expr, bindings, scope=scope) == "pytest.raises"
+        for item in statement.items
+    )
+
+
+def _try_swallows_exceptions(statement: ast.Try) -> bool:
+    return any(not _block_guarantees_raise(handler.body) for handler in statement.handlers)
+
+
+def _block_guarantees_raise(statements: list[ast.stmt]) -> bool:
+    if not statements:
+        return False
+    last = statements[-1]
+    if isinstance(last, ast.Raise):
+        return True
+    if isinstance(last, ast.If):
+        return (
+            bool(last.orelse)
+            and _block_guarantees_raise(
+                last.body,
+            )
+            and _block_guarantees_raise(last.orelse)
+        )
+    return False
 
 
 def _import_bindings(tree: ast.Module) -> dict[str, str]:
@@ -421,12 +706,7 @@ def _invokes_alembic(tokens: tuple[str, ...], *, action: str) -> bool:
         index += 1
     remaining = tokens[index:]
     if remaining[:1] == ("env",):
-        remaining = remaining[1:]
-        while remaining and (
-            ("=" in remaining[0] and not remaining[0].startswith("="))
-            or remaining[0].startswith("-")
-        ):
-            remaining = remaining[1:]
+        remaining = _strip_env_prefix(remaining[1:])
     if remaining[:2] in {("uv", "run"), ("poetry", "run")}:
         remaining = remaining[2:]
         options_with_values = {
@@ -456,6 +736,29 @@ def _invokes_alembic(tokens: tuple[str, ...], *, action: str) -> bool:
     return len(remaining) >= 2 and Path(remaining[0]).name == "alembic" and remaining[1] == action
 
 
+def _strip_env_prefix(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    remaining = tokens
+    options_with_values = {"-u", "--unset", "-C", "--chdir"}
+    while remaining:
+        token = remaining[0]
+        if token == "--":
+            return remaining[1:]
+        option = token.split("=", maxsplit=1)[0]
+        if option in options_with_values:
+            if "=" in token or (option in {"-u", "-C"} and token != option):
+                remaining = remaining[1:]
+                continue
+            if len(remaining) < 2:
+                return ()
+            remaining = remaining[2:]
+            continue
+        if token.startswith("-") or ("=" in token and not token.startswith("=")):
+            remaining = remaining[1:]
+            continue
+        return remaining
+    return ()
+
+
 def _is_statically_false(expression: ast.expr, *, bindings: dict[str, str]) -> bool:
     if isinstance(expression, ast.Constant):
         return not bool(expression.value)
@@ -472,4 +775,4 @@ def _is_statically_false(expression: ast.expr, *, bindings: dict[str, str]) -> b
 
 
 def _is_statically_true(expression: ast.expr) -> bool:
-    return isinstance(expression, ast.Constant) and expression.value is True
+    return isinstance(expression, ast.Constant) and bool(expression.value)

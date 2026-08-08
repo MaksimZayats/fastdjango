@@ -48,26 +48,34 @@ class ServiceMethodsUseKeywordOnlyArgumentsRule(ArchitectureRuleBase):
                     path=path,
                     context=context,
                 ):
-                    for method in (
-                        child
-                        for child in method_owner.body
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                        and not child.name.startswith("_")
-                        and child.name not in seen_methods
-                    ):
-                        seen_methods.add(method.name)
-                        declaration = (method_path, id(method))
-                        if declaration in checked_declarations:
+                    declarations_by_name: dict[
+                        str,
+                        list[ast.FunctionDef | ast.AsyncFunctionDef],
+                    ] = {}
+                    for child in method_owner.body:
+                        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                             continue
-                        checked_declarations.add(declaration)
-                        findings.extend(
-                            _method_findings(
-                                self.id,
-                                path=method_path,
-                                class_node=class_node,
-                                method=method,
+                        if child.name.startswith("_"):
+                            continue
+                        declarations_by_name.setdefault(child.name, []).append(child)
+                    for method_name, declarations in declarations_by_name.items():
+                        if method_name in seen_methods:
+                            continue
+                        seen_methods.add(method_name)
+                        for method in declarations:
+                            declaration = (method_path, id(method))
+                            if declaration in checked_declarations:
+                                continue
+                            checked_declarations.add(declaration)
+                            findings.extend(
+                                _method_findings(
+                                    self.id,
+                                    path=method_path,
+                                    class_node=class_node,
+                                    method=method,
+                                    context=context,
+                                )
                             )
-                        )
         return tuple(findings)
 
 
@@ -77,12 +85,12 @@ def _method_findings(
     path: Path,
     class_node: ast.ClassDef,
     method: ast.FunctionDef | ast.AsyncFunctionDef,
+    context: ArchitectureContext,
 ) -> list[SpecxArchitectureViolation]:
-    positional = [
-        argument.arg
-        for argument in (*method.args.posonlyargs, *method.args.args)
-        if argument.arg not in {"self", "cls"}
-    ]
+    positional_arguments = [*method.args.posonlyargs, *method.args.args]
+    if positional_arguments and not _is_static_method(method, path=path, context=context):
+        positional_arguments = positional_arguments[1:]
+    positional = [argument.arg for argument in positional_arguments]
     if method.args.vararg is not None:
         positional.append(f"*{method.args.vararg.arg}")
     if not positional:
@@ -96,3 +104,19 @@ def _method_findings(
             message=f"public parameters must be keyword-only: {positional}",
         )
     ]
+
+
+def _is_static_method(
+    method: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    return any(
+        context.qualified_name(
+            path,
+            decorator.func if isinstance(decorator, ast.Call) else decorator,
+        )
+        in {"builtins.staticmethod", "staticmethod"}
+        for decorator in method.decorator_list
+    )

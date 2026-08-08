@@ -132,7 +132,10 @@ READ_REPOSITORY_METHOD_PREFIXES = (
 )
 SCHEMA_BOOTSTRAP_METHOD_NAMES = {"create_all", "drop_all"}
 MAKE_COMMAND_PATTERN = re.compile(r"(?<![a-zA-Z0-9_-])make\s+([a-zA-Z0-9_.-]+)\b")
-MAKE_TARGET_PATTERN = re.compile(r"^([a-zA-Z0-9_.-]+):(?:\s|$)", re.MULTILINE)
+MAKE_TARGET_PATTERN = re.compile(
+    r"^([a-zA-Z0-9_.-]+(?:[ \t]+[a-zA-Z0-9_.-]+)*):(?:\s|$)",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -189,9 +192,10 @@ class ArchitectureContext:
             return set()
         text = path.read_text(encoding="utf-8")
         return {
-            match.group(1)
+            target
             for match in MAKE_TARGET_PATTERN.finditer(text)
-            if not match.group(1).startswith(".")
+            for target in match.group(1).split()
+            if not target.startswith(".")
         }
 
     def makefile_target_recipes(self) -> dict[str, str]:
@@ -224,7 +228,9 @@ class ArchitectureContext:
         if not chain:
             return ast.unparse(expression) if expression is not None else ""
         bindings = qualified_symbol_bindings(self, path, at_node=expression)
-        return ".".join((bindings.get(chain[0], chain[0]), *chain[1:]))
+        raw = ".".join((bindings.get(chain[0], chain[0]), *chain[1:]))
+        canonical = self._canonical_reexport_names(frozenset({raw}))
+        return next(iter(canonical)) if len(canonical) == 1 else raw
 
     def qualified_names(self, path: Path, expression: ast.expr | None) -> frozenset[str]:
         """Resolve every conservatively reachable qualified name for an expression."""
@@ -234,7 +240,51 @@ class ArchitectureContext:
             return frozenset({ast.unparse(expression) if expression is not None else ""})
         bindings = qualified_symbol_binding_choices(self, path, at_node=expression)
         roots = bindings.get(chain[0], frozenset({chain[0]}))
-        return frozenset(".".join((root, *chain[1:])) for root in roots)
+        return self._canonical_reexport_names(
+            frozenset(".".join((root, *chain[1:])) for root in roots)
+        )
+
+    def _canonical_reexport_names(self, names: frozenset[str]) -> frozenset[str]:
+        current = names
+        for _iteration in range(10):
+            replacements: dict[str, str] = {}
+            for init_path in (
+                path
+                for path in self.ast_project.files
+                if path.name == "__init__.py" and path.is_relative_to(self.src_root)
+            ):
+                relative_parent = init_path.relative_to(self.src_root).parent
+                package_module = ".".join(
+                    (self.config.package_name, *relative_parent.parts)
+                ).rstrip(".")
+                module_name = f"{package_module}.__init__"
+                for statement in self.tree(init_path).body:
+                    if not isinstance(statement, ast.ImportFrom):
+                        continue
+                    imported_module = _imported_module_name(
+                        statement,
+                        module_name=module_name,
+                    )
+                    for alias in statement.names:
+                        if alias.name == "*":
+                            continue
+                        exported = f"{package_module}.{alias.asname or alias.name}"
+                        replacements[exported] = f"{imported_module}.{alias.name}"
+            updated = frozenset(
+                next(
+                    (
+                        f"{target}{name.removeprefix(exported)}"
+                        for exported, target in replacements.items()
+                        if name == exported or name.startswith(f"{exported}.")
+                    ),
+                    name,
+                )
+                for name in current
+            )
+            if updated == current:
+                return current
+            current = updated
+        return current
 
 
 def documented_make_targets(text: str) -> set[str]:
@@ -762,23 +812,17 @@ def class_is_statically_abstract_at(
         and node.name[4].isupper()
     ):
         return True
-    aliases = context.aliases(source_path)
-    if _declares_explicit_abstract_class(node, aliases):
+    if _declares_explicit_abstract_class(
+        node,
+        source_path=source_path,
+        context=context,
+    ):
         return True
-
-    definitions = {
-        qualified_class_name(candidate, source_path=path, context=context): (path, candidate)
-        for path in context.source_paths()
-        for candidate in context.tree(path).body
-        if isinstance(candidate, ast.ClassDef)
-    }
     return bool(
         _unimplemented_abstract_methods(
             node,
             source_path=source_path,
             context=context,
-            definitions=definitions,
-            visited=set(),
         )
     )
 
@@ -798,7 +842,7 @@ def class_declares_sqlalchemy_mapping(node: ast.ClassDef) -> bool:
     )
     if explicitly_abstract:
         return False
-    return any(
+    declares_table = any(
         isinstance(child, (ast.Assign, ast.AnnAssign))
         and any(
             isinstance(target, ast.Name) and target.id in {"__table__", "__tablename__"}
@@ -806,14 +850,44 @@ def class_declares_sqlalchemy_mapping(node: ast.ClassDef) -> bool:
         )
         for child in node.body
     )
+    declares_mapped_attribute = any(
+        isinstance(descendant, ast.Call)
+        and attribute_chain(descendant.func)[-1:] in {("mapped_column",), ("Column",)}
+        for child in node.body
+        if isinstance(child, (ast.Assign, ast.AnnAssign))
+        for descendant in ast.walk(child)
+    )
+    return declares_table or declares_mapped_attribute
+
+
+def class_has_sqlalchemy_mapping_at(
+    node: ast.ClassDef,
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    """Return whether a project class or an effective ancestor declares a mapping."""
+
+    return any(
+        class_declares_sqlalchemy_mapping(candidate)
+        for _candidate_path, candidate in project_class_hierarchy(
+            node,
+            path=source_path,
+            context=context,
+        )
+    )
 
 
 def _declares_explicit_abstract_class(
     node: ast.ClassDef,
-    aliases: dict[str, str],
+    *,
+    source_path: Path,
+    context: ArchitectureContext,
 ) -> bool:
+    protocol_names = {"typing.Protocol", "typing_extensions.Protocol"}
     if any(
-        base_name(base, aliases).rsplit(".", maxsplit=1)[-1] == "Protocol" for base in node.bases
+        (resolved := context.qualified_names(source_path, base)) and resolved <= protocol_names
+        for base in node.bases
     ):
         return True
     return any(
@@ -833,39 +907,119 @@ def _unimplemented_abstract_methods(
     *,
     source_path: Path,
     context: ArchitectureContext,
-    definitions: dict[str, tuple[Path, ast.ClassDef]],
-    visited: set[str],
 ) -> set[str]:
-    qualified = qualified_class_name(node, source_path=source_path, context=context)
-    if qualified in visited:
-        return set()
+    hierarchy = project_class_hierarchy(node, path=source_path, context=context)
+    method_names = {
+        child.name
+        for _owner_path, owner in hierarchy
+        for child in owner.body
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     required: set[str] = set()
-    for base in node.bases:
-        candidate = definitions.get(context.qualified_name(source_path, base))
-        if candidate is not None:
-            base_path, base_node = candidate
-            required.update(
-                _unimplemented_abstract_methods(
-                    base_node,
-                    source_path=base_path,
-                    context=context,
-                    definitions=definitions,
-                    visited={*visited, qualified},
-                )
+    for method_name in method_names:
+        for owner_path, owner in hierarchy:
+            declaration = next(
+                (
+                    child
+                    for child in reversed(owner.body)
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and child.name == method_name
+                ),
+                None,
             )
-    aliases = context.aliases(source_path)
-    for child in node.body:
-        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        is_abstract = any(
-            annotation_name(decorator, aliases).rsplit(".", maxsplit=1)[-1] == "abstractmethod"
-            for decorator in child.decorator_list
-        )
-        if is_abstract:
-            required.add(child.name)
-        else:
-            required.discard(child.name)
+            if declaration is None:
+                continue
+            if _method_is_statically_abstract(
+                declaration,
+                path=owner_path,
+                context=context,
+            ):
+                required.add(method_name)
+            break
     return required
+
+
+def _method_is_statically_abstract(
+    method: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    abstract_decorators = {
+        "abc.abstractclassmethod",
+        "abc.abstractmethod",
+        "abc.abstractproperty",
+        "abc.abstractstaticmethod",
+    }
+    return any(
+        (resolved := context.qualified_names(path, decorator)) and resolved <= abstract_decorators
+        for decorator in method.decorator_list
+    )
+
+
+def project_class_hierarchy(
+    class_node: ast.ClassDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[tuple[Path, ast.ClassDef], ...]:
+    """Return project classes in Python C3 method-resolution order."""
+
+    definitions = {
+        qualified_class_name(node, source_path=candidate_path, context=context): (
+            candidate_path,
+            node,
+        )
+        for candidate_path in context.source_paths()
+        for node in context.tree(candidate_path).body
+        if isinstance(node, ast.ClassDef)
+    }
+    root = qualified_class_name(class_node, source_path=path, context=context)
+    cache: dict[str, tuple[str, ...]] = {}
+
+    def linearize(qualified: str, visiting: frozenset[str]) -> tuple[str, ...]:
+        if qualified in cache:
+            return cache[qualified]
+        if qualified in visiting or qualified not in definitions:
+            return (qualified,)
+        node_path, node = definitions[qualified]
+        bases = tuple(context.qualified_name(node_path, base) for base in node.bases)
+        result = (
+            qualified,
+            *_merge_c3(
+                [list(linearize(base, visiting | {qualified})) for base in bases] + [list(bases)]
+            ),
+        )
+        cache[qualified] = result
+        return result
+
+    return tuple(
+        definitions[qualified]
+        for qualified in linearize(root, frozenset())
+        if qualified in definitions
+    )
+
+
+def _merge_c3(sequences: list[list[str]]) -> tuple[str, ...]:
+    merged: list[str] = []
+    remaining = [sequence for sequence in sequences if sequence]
+    while remaining:
+        candidate: str | None = None
+        for sequence in remaining:
+            head = sequence[0]
+            if all(head not in other[1:] for other in remaining):
+                candidate = head
+                break
+        if candidate is None:
+            # Invalid Python hierarchies fail at runtime. Preserve deterministic analysis
+            # instead of making architecture checking itself fail.
+            candidate = remaining[0][0]
+        merged.append(candidate)
+        for sequence in remaining:
+            if sequence and sequence[0] == candidate:
+                sequence.pop(0)
+        remaining = [sequence for sequence in remaining if sequence]
+    return tuple(merged)
 
 
 def class_has_foundation_base_from_path(
@@ -1226,6 +1380,18 @@ def _flow_bindings_to_target(
                         target=target,
                         module_name=module_name,
                     )
+                for handler in statement.handlers:
+                    if any(_contains_node(child, target) for child in handler.body):
+                        return _flow_bindings_to_target(
+                            handler.body,
+                            _flow_try_handler_entry_state(
+                                statement,
+                                current,
+                                module_name=module_name,
+                            ),
+                            target=target,
+                            module_name=module_name,
+                        )
             for branch in _statement_branches(statement):
                 if any(_contains_node(child, target) for child in branch):
                     return _flow_bindings_to_target(
@@ -1248,10 +1414,8 @@ def _flow_statement_bindings(
     current = dict(state)
     if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
         targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-        values = _resolve_expression_choices(statement.value, current)
         for target in targets:
-            for name in _stored_names(target):
-                current[name] = values or frozenset({f"<local>.{name}"})
+            _bind_choice_target(target, statement.value, current)
         return current
     if isinstance(statement, ast.Try):
         before_final = _flow_try_before_finally(
@@ -1289,11 +1453,36 @@ def _flow_try_before_finally(
             body_state,
             module_name=module_name,
         )
+    handler_entry = _flow_try_handler_entry_state(
+        statement,
+        state,
+        module_name=module_name,
+    )
     handler_states = [
-        _flow_complete_block(handler.body, body_state or state, module_name=module_name)
+        _flow_complete_block(handler.body, handler_entry, module_name=module_name)
         for handler in statement.handlers
     ]
     return _merge_binding_states([body_state, *handler_states])
+
+
+def _flow_try_handler_entry_state(
+    statement: ast.Try,
+    state: dict[str, frozenset[str]],
+    *,
+    module_name: str,
+) -> dict[str, frozenset[str]]:
+    prefixes = [dict(state)]
+    current = dict(state)
+    for body_statement in statement.body:
+        current = _flow_statement_bindings(
+            body_statement,
+            current,
+            module_name=module_name,
+        )
+        prefixes.append(current)
+        if isinstance(body_statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            break
+    return _merge_binding_states(prefixes)
 
 
 def _flow_complete_block(
@@ -1364,6 +1553,33 @@ def _resolve_expression_choices(
         return frozenset()
     roots = bindings.get(chain[0], frozenset({chain[0]}))
     return frozenset(".".join((root, *chain[1:])) for root in roots)
+
+
+def _bind_choice_target(
+    target: ast.expr,
+    value: ast.expr | None,
+    bindings: dict[str, frozenset[str]],
+) -> None:
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
+        for child_target, child_value in zip(target.elts, value.elts, strict=True):
+            _bind_choice_target(child_target, child_value, bindings)
+        return
+    if isinstance(target, ast.Starred):
+        _bind_choice_target(target.value, value, bindings)
+        return
+    values = _resolve_expression_choices(value, bindings)
+    if not values and isinstance(value, (ast.Tuple, ast.List)):
+        values = frozenset(
+            resolved
+            for element in value.elts
+            for resolved in _resolve_expression_choices(element, bindings)
+        )
+    for name in _stored_names(target):
+        bindings[name] = values or frozenset({f"<local>.{name}"})
 
 
 def _update_choice_binding(
@@ -1464,10 +1680,29 @@ def _update_lexical_binding(
         else:
             targets = (node.target,)
             value = node.value
-        resolved_value = _resolve_expression_with_bindings(value, bindings)
         for target in targets:
-            if isinstance(target, ast.Name):
-                bindings[target.id] = resolved_value or f"<local>.{target.id}"
+            _bind_deterministic_target(target, value, bindings)
+
+
+def _bind_deterministic_target(
+    target: ast.expr,
+    value: ast.expr | None,
+    bindings: dict[str, str],
+) -> None:
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
+        for child_target, child_value in zip(target.elts, value.elts, strict=True):
+            _bind_deterministic_target(child_target, child_value, bindings)
+        return
+    if isinstance(target, ast.Starred):
+        _bind_deterministic_target(target.value, value, bindings)
+        return
+    resolved_value = _resolve_expression_with_bindings(value, bindings)
+    for name in _stored_names(target):
+        bindings[name] = resolved_value or f"<local>.{name}"
 
 
 def _resolve_expression_with_bindings(
@@ -1489,7 +1724,6 @@ def _index_class_definitions(
     mutable_index: dict[str, list[tuple[Path, set[str]]]],
 ) -> None:
     for node in statements:
-        _update_import_bindings(node, bindings, module_name=module_name)
         if isinstance(node, ast.ClassDef):
             mutable_index.setdefault(node.name, []).append(
                 (
@@ -1506,6 +1740,12 @@ def _index_class_definitions(
             )
             bindings[node.name] = f"{module_name}.{node.name}"
             continue
+        _update_lexical_binding(
+            node,
+            bindings,
+            module_name=module_name,
+            local_scope=False,
+        )
         for _, value in ast.iter_fields(node):
             raw_value = cast(object, value)
             if not isinstance(raw_value, list):

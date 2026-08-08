@@ -35,15 +35,17 @@ class DIWireNoFunctionInjectionRule(ArchitectureRuleBase):
                 and _is_inject_expression(decorator, path=path, context=context)
             }
             for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
-                if id(call) not in decorator_calls and _is_inject_expression(
-                    call, path=path, context=context
+                if id(call) not in decorator_calls and _is_function_di_expression(
+                    call,
+                    path=path,
+                    context=context,
                 ):
                     findings.append(
                         violation(
                             self.id,
                             path=path,
                             node=call,
-                            message="resolver_context.inject performs function-level DI",
+                            message="resolver_context performs function-level DI",
                         )
                     )
             for function in functions:
@@ -96,6 +98,23 @@ def _is_inject_expression(
 ) -> bool:
     target = expression.func if isinstance(expression, ast.Call) else expression
     return "diwire.resolver_context.inject" in context.qualified_names(path, target)
+
+
+def _is_function_di_expression(
+    expression: ast.expr,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    target = expression.func if isinstance(expression, ast.Call) else expression
+    return bool(
+        context.qualified_names(path, target)
+        & {
+            "diwire.resolver_context.inject",
+            "diwire.resolver_context.resolve",
+            "diwire.resolver_context.aresolve",
+        }
+    )
 
 
 def _is_injected_annotation(
@@ -183,6 +202,12 @@ def _project_alias_expression(
                 and isinstance(statement.targets[0], ast.Name)
             ):
                 alias_name, value = statement.targets[0].id, statement.value
+            elif (
+                isinstance(statement, ast.AnnAssign)
+                and isinstance(statement.target, ast.Name)
+                and statement.value is not None
+            ):
+                alias_name, value = statement.target.id, statement.value
             if (
                 alias_name is not None
                 and value is not None

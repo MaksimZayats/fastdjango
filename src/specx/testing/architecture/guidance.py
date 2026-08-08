@@ -59,11 +59,11 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "use-cases.orchestrate-through-collaborators": _guidance(
         "Move behavior behind an injected collaborator, construct a project type, or approve an exact qualified function.",
-        "Checks inherited project methods, merges reachable lexical aliases conservatively, and resolves constructors, typed collaborators, manager-owned UoWs, and callable type aliases.",
+        "Checks C3-effective project methods and fields, merges reachable aliases conservatively, and resolves re-exported constructors, typed collaborators, manager-owned UoWs, and type aliases.",
     ),
     "core.behavior-no-ambient-runtime-access": _guidance(
         "Inject a capability or gateway for time, randomness, IDs, environment, filesystem, process, or network access.",
-        "Checks inherited project methods and recognizes documented standard-library/client effects, ambient values, local-time conversions, reachable aliases, and typed pathlib or datetime values.",
+        "Checks C3-effective project methods and recognizes documented effects, ambient values, local-time conversions, reachable aliases, and aliased typed pathlib or datetime values.",
     ),
     "core.contracts-use-immutable-dataclasses": _guidance(
         "Decorate the contract with @dataclass(frozen=True, kw_only=True, slots=True).",
@@ -119,7 +119,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "services.methods-use-keyword-only-arguments": _guidance(
         "Insert * after self or cls so every public service input is keyword-only.",
-        "Follows effective project service inheritance and rejects positional parameters and variadic positional arguments after self or cls.",
+        "Follows C3-effective project service inheritance, checks every overload and implementation, and rejects positional or variadic positional arguments after the actual receiver.",
     ),
     "services.pure-no-io-or-runtime-state": _guidance(
         "Move IO or runtime-state behavior to an effect boundary and keep the pure service deterministic.",
@@ -147,7 +147,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "diwire.no-function-injection": _guidance(
         "Use Injected fields on classes; tests should accept ordinary fixtures and resolve the target from container.",
-        "Resolves definition-time DIWire decorator aliases, imported project Injected aliases, and exact Annotated injection markers on functions and methods.",
+        "Resolves DIWire decorator and Injected aliases, exact Annotated markers, and direct resolver_context resolve/aresolve calls on functions and methods.",
     ),
     "logging.no-injected-loggers": _guidance(
         "Create a private class logger from the full module and class name instead of injecting or registering Logger.",
@@ -163,11 +163,11 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "sqlalchemy.models-live-under-scope-infrastructure": _guidance(
         "Move each concrete model under core/<scope>/infrastructure/<technology>; keep only an abstract/base model in foundation.",
-        "Follows exact BaseSQLAlchemyModel ancestry; explicit table mappings remain concrete even when a foundation-path class starts with Base.",
+        "Follows exact BaseSQLAlchemyModel ancestry; explicit or inherited mappings and mapped columns remain concrete even for foundation-path Base classes.",
     ),
     "sqlalchemy.models-require-alembic": _guidance(
         "Add meaningful Alembic config, env and revision files, migration commands, and an upgrade-and-drift integration test.",
-        "Validates unshadowed Alembic-qualified executable calls, invoked migration entrypoints, upgrade operations, same-test upgrade/drift evidence, and parsed Make recipes with common runners.",
+        "Validates unshadowed reachable Alembic calls, sync or async entrypoint helper chains, upgrade operations, non-skipped unswallowed upgrade/drift tests, and parsed Make recipes.",
     ),
     "delivery.foundation-classes-live-under-delivery": _guidance(
         "Move every controller, delivery service, schema, or lifecycle under top-level delivery/.",
@@ -187,7 +187,7 @@ BUILTIN_RULE_GUIDANCE = {
     ),
     "tests.core-behavior-resolves-from-container": _guidance(
         "Use the native tests/unit/conftest.py container fixture and resolve every exact concrete behavior class in the mirrored test body.",
-        "Requires every reachable native fixture outcome to call project get_container, rejects fixture aliases/nearer fixtures/reassignment/dead code, requires awaited aresolve, and matches exact concrete targets.",
+        "Requires every reachable native fixture outcome to call project get_container and rejects fixture shadows, resolver mutation, swallowed/skipped/dead evidence, or unawaited aresolve.",
     ),
     "tests.fixtures-do-not-bundle-mocks": _guidance(
         "Keep one-off mocks in the test and replace grouped mock fixtures with focused fixtures or mirrored fakes.",

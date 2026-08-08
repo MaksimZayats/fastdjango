@@ -125,6 +125,7 @@ def _target_resolved_by_container(
             not any(argument.arg == "container" for argument in arguments)
             or _container_is_defaulted(function)
             or _container_is_parametrized(function)
+            or _test_is_disabled(function, path=test_path, context=context)
         ):
             continue
         executable_nodes = _executable_function_nodes(function)
@@ -134,6 +135,8 @@ def _target_resolved_by_container(
             if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
         }
         for call in (node for node in executable_nodes if isinstance(node, ast.Call)):
+            if not _node_is_reachable(function.body, call):
+                continue
             if not (
                 isinstance(call.func, ast.Attribute)
                 and isinstance(call.func.value, ast.Name)
@@ -144,7 +147,12 @@ def _target_resolved_by_container(
                 continue
             if call.func.attr == "aresolve" and id(call) not in awaited_call_ids:
                 continue
-            if _container_reassigned_before(function, call):
+            if _container_reassigned_before(function, call) or _resolution_exception_is_swallowed(
+                function,
+                call,
+                path=test_path,
+                context=context,
+            ):
                 continue
             argument = call.args[0]
             if (
@@ -152,6 +160,77 @@ def _target_resolved_by_container(
                 and context.qualified_name(test_path, argument) == target_qualified_name
             ):
                 return True
+    return False
+
+
+def _node_is_reachable(statements: list[ast.stmt], target: ast.AST) -> bool:
+    for statement in statements:
+        if any(node is target for node in ast.walk(statement)):
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                return False
+            if isinstance(statement, (ast.If, ast.While)):
+                if any(node is target for node in ast.walk(statement.test)):
+                    return True
+                branches = (
+                    (statement.orelse,)
+                    if _is_statically_false(statement.test)
+                    else (statement.body,)
+                    if _is_statically_true(statement.test)
+                    else (statement.body, statement.orelse)
+                )
+                return any(_node_is_reachable(branch, target) for branch in branches)
+            if isinstance(statement, (ast.For, ast.AsyncFor)):
+                if any(node is target for node in ast.walk(statement.iter)):
+                    return True
+                return _node_is_reachable(statement.body, target) or _node_is_reachable(
+                    statement.orelse,
+                    target,
+                )
+            if isinstance(statement, (ast.With, ast.AsyncWith)):
+                if any(
+                    any(node is target for node in ast.walk(item.context_expr))
+                    for item in statement.items
+                ):
+                    return True
+                return _node_is_reachable(statement.body, target)
+            if isinstance(statement, ast.Try):
+                return any(
+                    _node_is_reachable(block, target)
+                    for block in (
+                        statement.body,
+                        *(handler.body for handler in statement.handlers),
+                        statement.orelse,
+                        statement.finalbody,
+                    )
+                )
+            if isinstance(statement, ast.Match):
+                if any(node is target for node in ast.walk(statement.subject)):
+                    return True
+                return any(_node_is_reachable(case.body, target) for case in statement.cases)
+            return True
+        if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            return False
+    return False
+
+
+def _test_is_disabled(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    for decorator in function.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        qualified = context.qualified_name(path, target)
+        if qualified in {"pytest.mark.skip", "pytest.mark.xfail"}:
+            return True
+        if (
+            qualified == "pytest.mark.skipif"
+            and isinstance(decorator, ast.Call)
+            and decorator.args
+            and _is_statically_true(decorator.args[0])
+        ):
+            return True
     return False
 
 
@@ -242,28 +321,20 @@ def _fixture_has_native_container_provenance(
     path: Path,
     context: ArchitectureContext,
 ) -> bool:
-    outcomes = _reachable_fixture_outcomes(function.body)
-    return bool(outcomes) and all(
-        _is_direct_project_container_call(
-            outcome.value,
-            path=path,
-            context=context,
+    outcomes, falls_through = _fixture_block_outcomes(function.body)
+    has_yield = any(isinstance(outcome, (ast.Yield, ast.YieldFrom)) for outcome in outcomes)
+    return (
+        bool(outcomes)
+        and (has_yield or not falls_through)
+        and all(
+            _is_direct_project_container_call(
+                outcome.value,
+                path=path,
+                context=context,
+            )
+            for outcome in outcomes
         )
-        for outcome in outcomes
     )
-
-
-def _reachable_fixture_outcomes(
-    statements: list[ast.stmt],
-) -> tuple[ast.Return | ast.Yield | ast.YieldFrom, ...]:
-    outcomes: list[ast.Return | ast.Yield | ast.YieldFrom] = []
-    reachable = True
-    for statement in statements:
-        if not reachable:
-            break
-        statement_outcomes, reachable = _fixture_statement_outcomes(statement)
-        outcomes.extend(statement_outcomes)
-    return tuple(outcomes)
 
 
 def _fixture_statement_outcomes(
@@ -408,13 +479,67 @@ def _container_reassigned_before(
     call: ast.Call,
 ) -> bool:
     call_position = (call.lineno, call.col_offset)
-    return any(
-        isinstance(node, ast.Name)
-        and isinstance(node.ctx, ast.Store)
-        and node.id == "container"
-        and (node.lineno, node.col_offset) < call_position
-        for node in _executable_function_nodes(function)
-    )
+    for node in _executable_function_nodes(function):
+        position = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+        if position >= call_position:
+            continue
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id == "container"
+        ):
+            return True
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Store)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "container"
+        ):
+            return True
+        if isinstance(node, ast.Call) and _call_mutates_container(node):
+            return True
+    return False
+
+
+def _call_mutates_container(call: ast.Call) -> bool:
+    if not call.args or not isinstance(call.args[0], ast.Name) or call.args[0].id != "container":
+        return False
+    if isinstance(call.func, ast.Name) and call.func.id == "setattr":
+        return True
+    return isinstance(call.func, ast.Attribute) and call.func.attr == "setattr"
+
+
+def _resolution_exception_is_swallowed(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    call: ast.Call,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> bool:
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Try)
+            and node.handlers
+            and any(
+                any(descendant is call for descendant in ast.walk(statement))
+                for statement in node.body
+            )
+        ):
+            return True
+        if (
+            isinstance(node, (ast.With, ast.AsyncWith))
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and context.qualified_name(path, item.context_expr.func) == "pytest.raises"
+                for item in node.items
+            )
+            and any(
+                any(descendant is call for descendant in ast.walk(statement))
+                for statement in node.body
+            )
+        ):
+            return True
+    return False
 
 
 def _executable_function_nodes(

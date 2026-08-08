@@ -8,21 +8,24 @@ from specx.testing.architecture.context import (
     ArchitectureContext,
     active_uow_names_from_manager_fields,
     attribute_chain,
-    class_injected_unit_of_work_manager_field_names,
+    project_class_hierarchy,
     project_class_qualified_names,
-    qualified_class_name,
 )
 
 AMBIENT_EXACT_CALLS = frozenset(
     {
         "asyncio.sleep",
+        "asyncio.create_subprocess_exec",
+        "asyncio.create_subprocess_shell",
         "builtins.open",
         "datetime.date.today",
         "datetime.datetime.now",
         "datetime.datetime.today",
         "datetime.datetime.utcnow",
         "io.open",
+        "os.access",
         "os.chdir",
+        "os.cpu_count",
         "os.getcwd",
         "os.getegid",
         "os.geteuid",
@@ -34,6 +37,8 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.getenv",
         "os.listdir",
         "os.lstat",
+        "os.kill",
+        "os.killpg",
         "os.mkdir",
         "os.makedirs",
         "os.putenv",
@@ -48,6 +53,7 @@ AMBIENT_EXACT_CALLS = frozenset(
         "os.stat",
         "os.system",
         "os.unsetenv",
+        "os.walk",
         "os.path.exists",
         "os.path.abspath",
         "os.path.expanduser",
@@ -82,6 +88,7 @@ AMBIENT_EXACT_CALLS = frozenset(
 )
 AMBIENT_PREFIXES = (
     "aiohttp.",
+    "glob.",
     "httpx.",
     "locale.",
     "platform.",
@@ -98,8 +105,10 @@ AMBIENT_PREFIXES = (
 FILESYSTEM_METHODS = frozenset(
     {
         "chmod",
+        "absolute",
         "cwd",
         "exists",
+        "expanduser",
         "glob",
         "home",
         "is_dir",
@@ -116,6 +125,7 @@ FILESYSTEM_METHODS = frozenset(
         "resolve",
         "rglob",
         "rmdir",
+        "samefile",
         "stat",
         "symlink_to",
         "touch",
@@ -312,6 +322,7 @@ def _typed_datetime_chains(
         and isinstance(node.target, ast.Name)
         and _annotation_contains_datetime(node.annotation, path=path, context=context)
     )
+    _propagate_direct_object_aliases(function, names)
     return names
 
 
@@ -392,7 +403,48 @@ def pathlib_object_chains(
                 if chain and tuple(chain) not in names:
                     names.add(tuple(chain))
                     changed = True
+    _propagate_direct_object_aliases(function, names)
     return names
+
+
+def _propagate_direct_object_aliases(
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+    names: set[tuple[str, ...]],
+) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for node in _function_scope_nodes(function):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            source = attribute_chain(node.value)
+            if not source or not any(tuple(source[: len(root)]) == root for root in names):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                chain = attribute_chain(target)
+                if chain and tuple(chain) not in names:
+                    names.add(tuple(chain))
+                    changed = True
+
+
+def _function_scope_nodes(
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+) -> tuple[ast.AST, ...]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        if node is not function and isinstance(
+            node,
+            (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            return
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(function)
+    return tuple(nodes)
 
 
 def _annotation_contains_path(
@@ -412,41 +464,31 @@ def _annotation_contains_path(
     )
 
 
-def class_injected_field_names(
-    class_node: ast.ClassDef,
+def _injected_annotation_payload(
+    annotation: ast.expr,
     *,
     path: Path,
     context: ArchitectureContext,
-) -> set[str]:
-    return {
-        child.target.id
-        for child in class_node.body
-        if isinstance(child, ast.AnnAssign)
-        and isinstance(child.target, ast.Name)
-        and isinstance(child.annotation, ast.Subscript)
-        and context.qualified_name(path, child.annotation.value) == "diwire.Injected"
-    }
-
-
-def class_injected_callable_field_names(
-    class_node: ast.ClassDef,
-    *,
-    path: Path,
-    context: ArchitectureContext,
-) -> set[str]:
-    fields: set[str] = set()
-    for child in class_node.body:
-        if not isinstance(child, ast.AnnAssign) or not isinstance(child.target, ast.Name):
-            continue
-        annotation = child.annotation
-        if (
-            not isinstance(annotation, ast.Subscript)
-            or context.qualified_name(path, annotation.value) != "diwire.Injected"
-        ):
-            continue
-        if _annotation_is_callable(annotation.slice, path=path, context=context, visited=set()):
-            fields.add(child.target.id)
-    return fields
+    visited: frozenset[str],
+) -> tuple[Path, ast.expr] | None:
+    if (
+        isinstance(annotation, ast.Subscript)
+        and context.qualified_name(path, annotation.value) == "diwire.Injected"
+    ):
+        return path, annotation.slice
+    qualified = context.qualified_name(path, annotation)
+    if qualified in visited:
+        return None
+    alias = _project_alias_expression(qualified, path=path, context=context)
+    if alias is None:
+        return None
+    alias_path, expression = alias
+    return _injected_annotation_payload(
+        expression,
+        path=alias_path,
+        context=context,
+        visited=visited | {qualified},
+    )
 
 
 def _annotation_is_callable(
@@ -462,7 +504,31 @@ def _annotation_is_callable(
         return True
     if qualified in visited:
         return False
+    alias = _project_alias_expression(qualified, path=path, context=context)
+    if alias is not None:
+        alias_path, value = alias
+        return _annotation_is_callable(
+            value,
+            path=alias_path,
+            context=context,
+            visited={*visited, qualified},
+        )
+    return False
+
+
+def _project_alias_expression(
+    qualified_name: str,
+    *,
+    path: Path,
+    context: ArchitectureContext,
+) -> tuple[Path, ast.expr] | None:
     for alias_path in context.source_paths():
+        module = ".".join(
+            (
+                context.config.package_name,
+                *alias_path.relative_to(context.src_root).with_suffix("").parts,
+            )
+        )
         for node in context.tree(alias_path).body:
             alias_name: str | None = None
             value: ast.expr | None = None
@@ -480,23 +546,19 @@ def _annotation_is_callable(
                 and isinstance(node.targets[0], ast.Name)
             ):
                 alias_name, value = node.targets[0].id, node.value
+            elif (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.value is not None
+            ):
+                alias_name, value = node.target.id, node.value
             if alias_name is None or value is None:
                 continue
-            module = ".".join(
-                (
-                    context.config.package_name,
-                    *alias_path.relative_to(context.src_root).with_suffix("").parts,
-                )
-            )
-            alias_qualified = f"{module}.{alias_name}"
-            if alias_qualified == qualified or (alias_path == path and alias_name == qualified):
-                return _annotation_is_callable(
-                    value,
-                    path=alias_path,
-                    context=context,
-                    visited={*visited, qualified},
-                )
-    return False
+            if qualified_name in {alias_name, f"{module}.{alias_name}"} and (
+                alias_path == path or qualified_name == f"{module}.{alias_name}"
+            ):
+                return alias_path, value
+    return None
 
 
 def call_is_injected_collaborator_or_uow(
@@ -509,43 +571,94 @@ def call_is_injected_collaborator_or_uow(
     class_path: Path | None = None,
 ) -> bool:
     hierarchy = class_hierarchy(class_node, path=class_path or path, context=context)
-    injected_fields = {
-        field
-        for node_path, node in hierarchy
-        for field in class_injected_field_names(
-            node,
-            path=node_path,
-            context=context,
+    effective_annotations: dict[str, tuple[Path, ast.expr]] = {}
+    for node_path, node in hierarchy:
+        for child in node.body:
+            if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
+                effective_annotations.setdefault(child.target.id, (node_path, child.annotation))
+    injected_payloads = {
+        field: payload
+        for field, (node_path, annotation) in effective_annotations.items()
+        if (
+            payload := _injected_annotation_payload(
+                annotation,
+                path=node_path,
+                context=context,
+                visited=frozenset(),
+            )
         )
+        is not None
     }
+    injected_fields = set(injected_payloads)
     callable_fields = {
         field
-        for node_path, node in hierarchy
-        for field in class_injected_callable_field_names(
-            node,
-            path=node_path,
+        for field, (payload_path, payload) in injected_payloads.items()
+        if _annotation_is_callable(
+            payload,
+            path=payload_path,
             context=context,
+            visited=set(),
         )
     }
     resolved_chains = [tuple(name.split(".")) for name in context.qualified_names(path, call.func)]
     allowed_fields = injected_fields - callable_fields
-    if resolved_chains and all(
-        len(chain) >= 2 and chain[0] == "self" and chain[1] in allowed_fields
-        for chain in resolved_chains
+    if (
+        resolved_chains
+        and not _self_fields_reassigned_before(
+            function,
+            call,
+            fields=allowed_fields,
+        )
+        and all(
+            len(chain) >= 2 and chain[0] == "self" and chain[1] in allowed_fields
+            for chain in resolved_chains
+        )
     ):
         return True
     manager_fields = {
         field
-        for node_path, node in hierarchy
-        for field in class_injected_unit_of_work_manager_field_names(
-            node, context.aliases(node_path)
-        )
+        for field, (payload_path, payload) in injected_payloads.items()
+        if context.qualified_name(payload_path, payload).endswith("UnitOfWorkManager")
     }
     active_uows = active_uow_names_from_manager_fields(function, manager_fields)
     return bool(
         resolved_chains
+        and not _self_fields_reassigned_before(function, call, fields=manager_fields)
         and all(resolved_chain[0] in active_uows for resolved_chain in resolved_chains)
     )
+
+
+def _self_fields_reassigned_before(
+    function: ast.AsyncFunctionDef | ast.FunctionDef,
+    call: ast.Call,
+    *,
+    fields: set[str],
+) -> bool:
+    call_position = (call.lineno, call.col_offset)
+    for node in _function_scope_nodes(function):
+        position = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+        if position >= call_position:
+            continue
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Store)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+            and node.attr in fields
+        ):
+            return True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "self"
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in fields
+        ):
+            return True
+    return False
 
 
 def class_hierarchy(
@@ -554,32 +667,7 @@ def class_hierarchy(
     path: Path,
     context: ArchitectureContext,
 ) -> tuple[tuple[Path, ast.ClassDef], ...]:
-    definitions = {
-        qualified_class_name(node, source_path=candidate_path, context=context): (
-            candidate_path,
-            node,
-        )
-        for candidate_path in context.source_paths()
-        for node in context.tree(candidate_path).body
-        if isinstance(node, ast.ClassDef)
-    }
-    found: list[tuple[Path, ast.ClassDef]] = []
-    visited: set[str] = set()
-
-    def collect(node_path: Path, node: ast.ClassDef) -> None:
-        key = f"{node_path}:{node.name}"
-        if key in visited:
-            return
-        visited.add(key)
-        found.append((node_path, node))
-        for base in node.bases:
-            resolved = context.qualified_name(node_path, base)
-            candidate = definitions.get(resolved)
-            if candidate is not None:
-                collect(*candidate)
-
-    collect(path, class_node)
-    return tuple(found)
+    return project_class_hierarchy(class_node, path=path, context=context)
 
 
 def is_statically_recognized_constructor(

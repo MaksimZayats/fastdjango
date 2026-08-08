@@ -120,6 +120,78 @@ def test_plain_container_helpers_do_not_shadow_pytest_fixture(
     assert _check(tmp_path).violations == ()
 
 
+def test_container_proof_rejects_method_mutation_and_swallowed_resolution(
+    tmp_path: Path,
+) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_mutated(container):\n"
+        "    container.resolve = lambda target: object()\n"
+        "    container.resolve(OrderService)\n\n"
+        "def test_swallowed(container):\n"
+        "    try:\n"
+        "        container.resolve(OrderService)\n"
+        "    except Exception:\n"
+        "        pass\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+def test_native_container_fixture_rejects_reachable_implicit_none(tmp_path: Path) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\n"
+        "def container(feature_enabled):\n"
+        "    if feature_enabled:\n"
+        "        return get_container()\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+def test_skipped_container_resolution_is_not_evidence(tmp_path: Path) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "import pytest\n"
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "@pytest.mark.skip(reason='disabled')\n"
+        "def test_graph(container):\n"
+        "    container.resolve(OrderService)\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
+def test_unreachable_container_resolution_is_not_evidence(tmp_path: Path) -> None:
+    _write_project(tmp_path)
+    _write_root_fixture(
+        tmp_path,
+        "@pytest.fixture\ndef container():\n    return get_container()\n",
+    )
+    _write(
+        _test_path(tmp_path),
+        "from demo_service.core.orders.services.order import OrderService\n\n"
+        "def test_graph(container):\n"
+        "    return\n"
+        "    container.resolve(OrderService)\n",
+    )
+
+    assert [item.symbol for item in _check(tmp_path).violations] == ["OrderService"]
+
+
 def _write_project(project_root: Path) -> None:
     _write(
         project_root / "src/demo_service/core/orders/services/order.py",

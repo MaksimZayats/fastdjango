@@ -46,6 +46,58 @@ def test_core_rejects_project_root_models_and_pydantic_dataclasses(
     assert "DomainValue" not in report.violations[0].message
 
 
+def test_core_rejects_legacy_aliases_of_pydantic_and_settings_types(
+    tmp_path: Path,
+) -> None:
+    _write(
+        _source(tmp_path, "contracts.py"),
+        "from typing import TypeAlias\n"
+        "from pydantic import BaseModel\n"
+        "from pydantic_settings import BaseSettings\n\n"
+        "class RuntimePayload(BaseModel): pass\n"
+        "class RuntimeSettings(BaseSettings): pass\n"
+        "PayloadAlias: TypeAlias = RuntimePayload\n"
+        "SettingsAlias: TypeAlias = RuntimeSettings\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/parser.py"),
+        "from demo_service.contracts import PayloadAlias, SettingsAlias\n\n"
+        "def parse(payload: PayloadAlias, settings: SettingsAlias):\n"
+        "    return payload, settings\n",
+    )
+
+    report = _check_only(
+        tmp_path,
+        SpecxRuleId.CORE_NO_RUNTIME_CONFIGURATION_OR_PYDANTIC,
+    )
+
+    assert len(report.violations) == 2
+
+
+def test_core_rejects_package_reexported_pydantic_types(tmp_path: Path) -> None:
+    _write(
+        _source(tmp_path, "delivery/schemas/request.py"),
+        "from pydantic import BaseModel\n\nclass Request(BaseModel): pass\n",
+    )
+    _write(
+        _source(tmp_path, "delivery/schemas/__init__.py"),
+        "from .request import Request\n",
+    )
+    _write(
+        _source(tmp_path, "core/orders/services/parser.py"),
+        "from demo_service.delivery.schemas import Request\n\n"
+        "def parse(value): return Request.model_validate(value)\n",
+    )
+
+    report = _check_only(
+        tmp_path,
+        SpecxRuleId.CORE_NO_RUNTIME_CONFIGURATION_OR_PYDANTIC,
+    )
+
+    assert len(report.violations) == 1
+    assert "request.Request" in report.violations[0].message
+
+
 def test_service_signature_reports_each_inherited_declaration_once_and_overrides(
     tmp_path: Path,
 ) -> None:

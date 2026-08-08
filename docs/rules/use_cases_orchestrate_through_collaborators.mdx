@@ -38,7 +38,8 @@ class PlaceOrderUseCase(BaseUseCase):
 Checks inherited project methods and resolves definition-time aliases, shadowing, and reachable
 control-flow branches conservatively. Statically indexed project classes, deterministic built-in and
 standard-library value constructors, typed injected collaborator calls, manager-owned UoW calls, and
-exact configured names pass. An injected plain `Callable`, including a project type alias, is still a
-function rather than an architectural collaborator. Unverifiable external constructors can be
-approved by exact qualified name; uppercase helper functions do not pass merely because of
-capitalization. Dynamic dispatch is not inferred.
+exact configured names pass. Project package re-exports and legacy or PEP 695 injected aliases are
+resolved. Effective C3 field overrides and field reassignment remove injected-field trust. An injected
+plain `Callable`, including a project type alias, is still a function rather than an architectural
+collaborator. Unverifiable external constructors can be approved by exact qualified name; uppercase
+helper functions do not pass merely because of capitalization. Dynamic dispatch is not inferred.

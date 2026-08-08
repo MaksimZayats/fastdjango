@@ -35,4 +35,5 @@ class PriceService(BasePureService):
 ### Detection notes
 
 Checks effective public methods on direct and inherited project pure, read, and effect service
-subclasses. Both ordinary positional parameters and `*args` violate the keyword-only contract.
+subclasses. Every overload and implementation is checked. Only the actual instance/class receiver is
+exempt; ordinary positional parameters and `*args` violate the keyword-only contract.

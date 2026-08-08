@@ -236,6 +236,12 @@ def _project_subclasses_of(
                     and isinstance(statement.targets[0], ast.Name)
                 ):
                     alias_name, value = statement.targets[0].id, statement.value
+                elif (
+                    isinstance(statement, ast.AnnAssign)
+                    and isinstance(statement.target, ast.Name)
+                    and statement.value is not None
+                ):
+                    alias_name, value = statement.target.id, statement.value
                 if alias_name is None or value is None:
                     continue
                 qualified_alias = f"{module}.{alias_name}"
